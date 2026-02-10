@@ -17,6 +17,11 @@ export default function PrivacyPage() {
         and protect personal data.
       </p>
 
+      <p>
+  Wedly Pro does not use user data for advertising or tracking across apps or websites owned by other companies.
+</p>
+
+
       <h2>Information we collect</h2>
       <ul>
         <li>Account information such as name and email address</li>
