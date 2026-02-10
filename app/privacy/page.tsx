@@ -1,3 +1,11 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Privacy Policy | Wedly Pro",
+  description: "How Wedly Pro collects, uses, and protects personal data",
+};
+
+
 export default function PrivacyPage() {
   return (
     <main>

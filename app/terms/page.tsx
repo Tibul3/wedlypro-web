@@ -1,3 +1,10 @@
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Terms and Conditions | Wedly Pro",
+  description: "Terms governing the use of the Wedly Pro platform",
+};
+
 export default function TermsPage() {
   return (
     <main style={{ maxWidth: 760, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
