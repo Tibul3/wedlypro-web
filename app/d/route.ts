@@ -5,9 +5,9 @@ const SUPABASE_RESOLVER_URL =
 
 export async function GET(
   _req: NextRequest,
-  ctx: { params: Promise<{ token: string }> }
+  { params }: { params: { token: string } }
 ) {
-  const { token } = await ctx.params;
+  const token = params.token;
   if (!token) return new NextResponse('Missing token.', { status: 400 });
 
   const resolverUrl = `${SUPABASE_RESOLVER_URL}?token=${encodeURIComponent(token)}`;
@@ -23,15 +23,12 @@ export async function GET(
     return new NextResponse('Document is unavailable.', { status: 404 });
   }
 
-  const contentType = upstream.headers.get('content-type') ?? 'application/pdf';
-  const contentDisposition =
-    upstream.headers.get('content-disposition') ?? 'inline; filename="document.pdf"';
-
   return new NextResponse(upstream.body, {
     status: 200,
     headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': contentDisposition,
+      'Content-Type': upstream.headers.get('content-type') ?? 'application/pdf',
+      'Content-Disposition':
+        upstream.headers.get('content-disposition') ?? 'inline; filename="document.pdf"',
       'Cache-Control': 'private, no-store, max-age=0',
       'X-Robots-Tag': 'noindex, nofollow',
     },
