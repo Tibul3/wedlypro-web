@@ -5,9 +5,9 @@ const SUPABASE_RESOLVER_URL =
 
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { token: string } }
+  context: { params: Promise<{ token: string }> }
 ) {
-  const token = params.token;
+  const { token } = await context.params;
   if (!token) return new NextResponse('Missing token.', { status: 400 });
 
   const resolverUrl = `${SUPABASE_RESOLVER_URL}?token=${encodeURIComponent(token)}`;
