@@ -1,38 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const target = url.searchParams.get('target');
+export async function GET(_req: NextRequest, ctx: { params: { token: string } }) {
+  const token = ctx.params.token;
+  if (!token) return new NextResponse('Missing token.', { status: 400 });
 
-  if (!target) return new NextResponse('Missing document link.', { status: 400 });
+  const resolver = `https://hxoqpapwugszehqshkox.supabase.co/functions/v1/resolveDocumentEmailLink?token=${encodeURIComponent(token)}`;
+  const res = await fetch(resolver, { method: 'GET' });
+  const data = await res.json().catch(() => null);
 
-  let parsed: URL;
-  try {
-    parsed = new URL(target);
-  } catch {
-    return new NextResponse('Invalid document link.', { status: 400 });
+  if (!res.ok || !data?.targetUrl) {
+    return new NextResponse('Document link is invalid or expired.', { status: 410 });
   }
 
-  // Safety: only allow your Supabase host
-  if (parsed.hostname !== 'hxoqpapwugszehqshkox.supabase.co') {
-    return new NextResponse('Invalid target host.', { status: 400 });
-  }
-
-  const upstream = await fetch(parsed.toString(), { method: 'GET' });
-  if (!upstream.ok || !upstream.body) {
-    return new NextResponse('Document not available.', { status: upstream.status || 502 });
-  }
-
-  const contentType = upstream.headers.get('content-type') ?? 'application/pdf';
-  const contentDisposition =
-    upstream.headers.get('content-disposition') ?? 'inline; filename="document.pdf"';
-
-  return new NextResponse(upstream.body, {
-    status: 200,
-    headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': contentDisposition,
-      'Cache-Control': 'private, no-store',
-    },
-  });
+  return NextResponse.redirect(data.targetUrl, 302);
 }
