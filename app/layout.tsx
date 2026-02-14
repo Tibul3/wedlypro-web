@@ -1,16 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
 import Image from "next/image";
 import Link from "next/link";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
@@ -26,11 +21,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${inter.variable} bg-zinc-50 text-zinc-900`}>
         <header className="sticky top-0 z-40 border-b border-black/5 bg-white/90 backdrop-blur">
-          <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <Link href="/" className="inline-flex items-center gap-3 no-underline">
-              {/* Replace with /public/logo.png when final production logo is ready. */}
+              {/* If /public/logo.png is unavailable, replace this with a simple initials mark. */}
               <Image
                 src="/logo.png"
                 alt="Wedly Pro logo"
@@ -42,6 +37,9 @@ export default function RootLayout({
             </Link>
 
             <nav className="flex items-center gap-5 text-sm text-zinc-600">
+              <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
+                Contact
+              </a>
               <Link className="hover:text-zinc-900" href="/privacy">
                 Privacy
               </Link>
@@ -55,11 +53,14 @@ export default function RootLayout({
         <main className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">{children}</main>
 
         <footer className="border-t border-black/5 bg-white">
-          <div className="mx-auto flex w-full max-w-6xl flex-col justify-between gap-4 px-6 py-8 text-sm text-zinc-600 md:flex-row md:items-center">
+          <div className="mx-auto flex w-full max-w-6xl flex-col justify-between gap-4 px-4 py-8 text-sm text-zinc-600 sm:px-6 lg:flex-row lg:items-center lg:px-8">
             <p>
               © {new Date().getFullYear()} Wedly Pro. All rights reserved.
             </p>
-            <div className="flex items-center gap-5">
+            <div className="flex flex-wrap items-center gap-5">
+              <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
+                hello@wedlypro.com
+              </a>
               <Link className="hover:text-zinc-900" href="/privacy">
                 Privacy Policy
               </Link>
