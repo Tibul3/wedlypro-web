@@ -50,9 +50,9 @@ const steps = [
 ];
 
 const previewScreens = [
-  { src: "/screen2.PNG", alt: "Lead management screen" },
-  { src: "/screen3.PNG", alt: "Client detail screen" },
-  { src: "/screen4.PNG", alt: "Document workflow screen" },
+  { src: "/screen2.png", alt: "Lead management screen" },
+  { src: "/screen3.png", alt: "Client detail screen" },
+  { src: "/screen4.png", alt: "Document workflow screen" },
 ];
 
 const faqs = [
@@ -119,7 +119,7 @@ export default function HomePage() {
             <div className="mx-auto max-w-[285px] rounded-[2.1rem] border border-black/10 bg-zinc-900 p-3 shadow-[0_24px_42px_-28px_rgba(16,24,40,0.8)]">
               <div className="relative h-[500px] overflow-hidden rounded-[1.7rem] bg-white">
                 <Image
-                  src="/screen1.PNG"
+                  src="/screen1.png"
                   alt="Wedly Pro app preview"
                   fill
                   priority
