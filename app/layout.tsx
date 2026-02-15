@@ -37,6 +37,9 @@ export default function RootLayout({
             </Link>
 
             <nav className="flex items-center gap-5 text-sm text-zinc-600">
+              <Link className="hover:text-zinc-900" href="/support">
+                Support
+              </Link>
               <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
                 Contact
               </a>
@@ -61,6 +64,9 @@ export default function RootLayout({
               <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
                 hello@wedlypro.com
               </a>
+              <Link className="hover:text-zinc-900" href="/support">
+                Support
+              </Link>
               <Link className="hover:text-zinc-900" href="/privacy">
                 Privacy Policy
               </Link>
