@@ -26,13 +26,13 @@ export default function RootLayout({
           <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <Link href="/" className="inline-flex items-center gap-3 no-underline">
               {/* If /public/logo.png is unavailable, replace this with a simple initials mark. */}
-              <span className="inline-flex h-10 w-10 items-center justify-center overflow-hidden rounded-xl">
+              <span className="inline-flex h-12 w-12 items-center justify-center overflow-hidden rounded-xl">
                 <Image
                   src="/logo.png"
                   alt="Wedly Pro logo"
-                  width={40}
-                  height={40}
-                  className="h-10 w-10 scale-125 object-contain"
+                  width={48}
+                  height={48}
+                  className="h-12 w-12 scale-125 object-contain"
                 />
               </span>
               <span className="text-base font-semibold tracking-tight text-zinc-900">Wedly Pro</span>
