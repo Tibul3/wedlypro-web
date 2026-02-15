@@ -4,6 +4,8 @@
 
 :root {
   color-scheme: light;
+  --brand-primary: #2f7d6d;
+  --brand-primary-hover: #286a5d;
 }
 
 body {
@@ -11,4 +13,23 @@ body {
   color: #18181b;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+@layer components {
+  .btn-primary {
+    @apply rounded-xl px-5 py-3 text-sm font-medium text-white no-underline shadow-[0_18px_36px_-24px_rgba(16,24,40,0.55)] transition;
+    background-color: var(--brand-primary);
+  }
+
+  .btn-primary:hover {
+    background-color: var(--brand-primary-hover);
+  }
+
+  .btn-secondary {
+    @apply rounded-xl border border-black/10 bg-white px-5 py-3 text-sm font-medium text-zinc-900 no-underline transition hover:bg-zinc-50;
+  }
+
+  .badge-subtle {
+    @apply inline-flex rounded-full border border-black/10 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600;
+  }
 }

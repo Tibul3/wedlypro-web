@@ -17,16 +17,19 @@ export default function DownloadPage() {
         <div className="mt-6 flex flex-wrap gap-3">
           <a
             href="#"
-            className="rounded-xl bg-zinc-900 px-5 py-3 text-sm font-medium text-white no-underline"
+            className="btn-primary"
           >
             App Store (Coming soon)
           </a>
           <Link
             href="/"
-            className="rounded-xl border border-black/10 px-5 py-3 text-sm font-medium text-zinc-900 no-underline"
+            className="btn-secondary"
           >
             Back to homepage
           </Link>
+        </div>
+        <div className="mt-3">
+          <span className="badge-subtle">Android release coming soon</span>
         </div>
       </div>
     </section>
