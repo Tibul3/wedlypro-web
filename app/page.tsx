@@ -49,6 +49,12 @@ const steps = [
   },
 ];
 
+const previewScreens = [
+  { src: "/screen2.PNG", alt: "Lead management screen" },
+  { src: "/screen3.PNG", alt: "Client detail screen" },
+  { src: "/screen4.PNG", alt: "Document workflow screen" },
+];
+
 const faqs = [
   {
     question: "Who is Wedly Pro designed for?",
@@ -113,7 +119,7 @@ export default function HomePage() {
             <div className="mx-auto max-w-[285px] rounded-[2.1rem] border border-black/10 bg-zinc-900 p-3 shadow-[0_24px_42px_-28px_rgba(16,24,40,0.8)]">
               <div className="relative h-[500px] overflow-hidden rounded-[1.7rem] bg-white">
                 <Image
-                  src="/screen1.png"
+                  src="/screen1.PNG"
                   alt="Wedly Pro app preview"
                   fill
                   priority
@@ -168,19 +174,20 @@ export default function HomePage() {
           App previews
         </h2>
         <div className="mt-6 grid gap-4 md:grid-cols-3">
-          {[1, 2, 3].map((preview) => (
+          {previewScreens.map((preview) => (
             <div
-              key={preview}
+              key={preview.src}
               className="rounded-2xl border border-black/10 bg-zinc-50 p-4 shadow-[0_18px_34px_-26px_rgba(16,24,40,0.45)]"
             >
-              <div className="mx-auto w-full max-w-[230px] rounded-[1.6rem] border border-black/10 bg-white p-3">
-                <div className="h-[370px] rounded-[1.2rem] bg-gradient-to-b from-zinc-100 to-white p-4">
-                  <div className="h-5 w-24 rounded-full bg-zinc-200" />
-                  <div className="mt-5 space-y-3">
-                    <div className="h-10 rounded-lg bg-white" />
-                    <div className="h-20 rounded-lg bg-white" />
-                    <div className="h-10 rounded-lg bg-white" />
-                  </div>
+              <div className="mx-auto w-full max-w-[230px] rounded-[1.6rem] border border-black/10 bg-zinc-900 p-3">
+                <div className="relative h-[370px] overflow-hidden rounded-[1.2rem] bg-white">
+                  <Image
+                    src={preview.src}
+                    alt={preview.alt}
+                    fill
+                    sizes="(max-width: 768px) 90vw, 230px"
+                    className="object-cover object-top"
+                  />
                 </div>
               </div>
             </div>

@@ -45,12 +45,6 @@ export default function RootLayout({
               <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
                 Contact
               </a>
-              <Link className="hover:text-zinc-900" href="/privacy">
-                Privacy
-              </Link>
-              <Link className="hover:text-zinc-900" href="/terms">
-                Terms
-              </Link>
             </nav>
           </div>
         </header>
