@@ -100,18 +100,15 @@ export default function HomePage() {
               documents in one polished mobile workflow.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <Link
-                href="/download"
-                className="rounded-xl bg-zinc-900 px-5 py-3 text-sm font-medium text-white no-underline shadow-[0_18px_36px_-24px_rgba(16,24,40,0.55)] transition hover:bg-zinc-800"
-              >
+              <Link href="/download" className="btn-primary">
                 Download on the App Store
               </Link>
-              <a
-                href="mailto:hello@wedlypro.com"
-                className="rounded-xl border border-black/10 bg-white px-5 py-3 text-sm font-medium text-zinc-900 no-underline transition hover:bg-zinc-50"
-              >
+              <a href="mailto:hello@wedlypro.com" className="btn-secondary">
                 Contact
               </a>
+            </div>
+            <div className="mt-3">
+              <span className="badge-subtle">Android app coming soon</span>
             </div>
           </div>
 
