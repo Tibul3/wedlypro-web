@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 
 export const metadata: Metadata = {
@@ -110,18 +111,15 @@ export default function HomePage() {
 
           <div className="rounded-2xl border border-black/10 bg-gradient-to-br from-zinc-100 via-white to-stone-100 p-5 shadow-[0_20px_40px_-24px_rgba(16,24,40,0.35)]">
             <div className="mx-auto max-w-[285px] rounded-[2.1rem] border border-black/10 bg-zinc-900 p-3 shadow-[0_24px_42px_-28px_rgba(16,24,40,0.8)]">
-              <div className="h-[500px] rounded-[1.7rem] bg-white p-4">
-                <div className="mx-auto h-6 w-28 rounded-full bg-zinc-200" />
-                <div className="mt-6 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-                  <div className="h-2 w-20 rounded-full bg-zinc-300" />
-                  <div className="mt-3 h-8 rounded-lg bg-white" />
-                  <div className="mt-2 h-8 rounded-lg bg-white" />
-                </div>
-                <div className="mt-4 rounded-2xl border border-zinc-200 bg-zinc-50 p-4">
-                  <div className="h-2 w-24 rounded-full bg-zinc-300" />
-                  <div className="mt-3 h-14 rounded-lg bg-white" />
-                </div>
-                <div className="mt-4 h-10 rounded-xl bg-zinc-900/90" />
+              <div className="relative h-[500px] overflow-hidden rounded-[1.7rem] bg-white">
+                <Image
+                  src="/screen1.png"
+                  alt="Wedly Pro app preview"
+                  fill
+                  priority
+                  sizes="(max-width: 768px) 90vw, 285px"
+                  className="object-cover object-top"
+                />
               </div>
             </div>
           </div>
