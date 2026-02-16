@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import Image from "next/image";
 import Link from "next/link";
-import { Analytics } from "@vercel/analytics/react";
-import { SpeedInsights } from "@vercel/speed-insights/next";
+import ConsentManagedAnalytics from "./components/ConsentManagedAnalytics";
+import CookieConsentBanner from "./components/CookieConsentBanner";
+import CookiePreferencesLink from "./components/CookiePreferencesLink";
 import "./globals.css";
 
 const inter = Inter({
@@ -82,9 +83,9 @@ export default function RootLayout({
               <Link className="hover:text-zinc-900" href="/support">
                 Support
               </Link>
-              <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
+              <Link className="hover:text-zinc-900" href="/support">
                 Contact
-              </a>
+              </Link>
             </nav>
           </div>
         </header>
@@ -97,9 +98,9 @@ export default function RootLayout({
               © {new Date().getFullYear()} Wedly Pro. All rights reserved.
             </p>
             <div className="flex flex-wrap items-center gap-5">
-              <a className="hover:text-zinc-900" href="mailto:hello@wedlypro.com">
-                hello@wedlypro.com
-              </a>
+              <Link className="hover:text-zinc-900" href="/support">
+                Contact
+              </Link>
               <Link className="hover:text-zinc-900" href="/support">
                 Support
               </Link>
@@ -109,11 +110,12 @@ export default function RootLayout({
               <Link className="hover:text-zinc-900" href="/terms">
                 Terms
               </Link>
+              <CookiePreferencesLink />
             </div>
           </div>
         </footer>
-        <Analytics />
-        <SpeedInsights />
+        <CookieConsentBanner />
+        <ConsentManagedAnalytics />
       </body>
     </html>
   );

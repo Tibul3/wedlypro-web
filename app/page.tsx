@@ -103,9 +103,9 @@ export default function HomePage() {
               <Link href="/download" className="btn-primary">
                 Download on the App Store
               </Link>
-              <a href="mailto:hello@wedlypro.com" className="btn-secondary">
+              <Link href="/support" className="btn-secondary">
                 Contact
-              </a>
+              </Link>
             </div>
             <div className="mt-3">
               <span className="badge-subtle">Android app coming soon</span>
@@ -214,14 +214,11 @@ export default function HomePage() {
 
       <section className="rounded-3xl border border-black/10 bg-white px-6 py-8 shadow-[0_20px_40px_-24px_rgba(16,24,40,0.35)]">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-zinc-600">
-            Questions? Email{" "}
-            <a className="font-medium text-zinc-900 underline" href="mailto:hello@wedlypro.com">
-              hello@wedlypro.com
-            </a>
-            .
-          </p>
+          <p className="text-sm text-zinc-600">Questions? Visit our support page.</p>
           <div className="flex flex-wrap gap-4 text-sm">
+            <Link className="text-zinc-900 underline" href="/support">
+              Support
+            </Link>
             <Link className="text-zinc-900 underline" href="/privacy">
               Privacy Policy
             </Link>

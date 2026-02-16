@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import SupportContactForm from "../components/SupportContactForm";
 
 export const metadata: Metadata = {
   title: "Support | Wedly Pro",
@@ -22,12 +23,10 @@ export default function SupportPage() {
         <div className="space-y-6 text-sm leading-7 text-zinc-700">
           <section>
             <h2 className="text-xl font-semibold tracking-tight text-zinc-900">Contact support</h2>
-            <p className="mt-3">Please contact us at:</p>
-            <p className="mt-1">
-              <a className="font-medium text-zinc-900 underline" href="mailto:support@wedlypro.com">
-                support@wedlypro.com
-              </a>
-            </p>
+            <p className="mt-3">Use the form below and our support team will respond by email.</p>
+            <div className="mt-4">
+              <SupportContactForm />
+            </div>
           </section>
 
           <section>
