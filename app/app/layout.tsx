@@ -10,6 +10,15 @@ type NavItem = {
   label: string;
 };
 
+type SupplierRow = {
+  id: string;
+  user_id: string;
+  tier: string | null;
+  plan: string | null;
+  entitlement_source: string | null;
+  subscription_status: string | null;
+};
+
 const navItems: NavItem[] = [
   { href: "/app/leads", label: "Leads" },
   { href: "/app/clients", label: "Clients" },
@@ -25,6 +34,28 @@ function titleForPath(pathname: string): string {
   return hit ? hit.label : "Wedly Pro";
 }
 
+function toTitleCase(value: string): string {
+  return value
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function sourceLabel(source: string | null): string {
+  if (!source) return "No source";
+  if (source === "ios_iap") return "Apple";
+  if (source === "web_stripe") return "Web Stripe";
+  return toTitleCase(source);
+}
+
+function tierLabel(tier: string | null, plan: string | null): string {
+  if (tier === "professional") return "Professional";
+  if (tier === "essentials") return "Essentials";
+  if (plan === "pro") return "Professional";
+  return "Free";
+}
+
 export default function ProductLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -32,34 +63,69 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
 
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [email, setEmail] = useState<string | null>(null);
+  const [supplier, setSupplier] = useState<SupplierRow | null>(null);
+  const [supplierError, setSupplierError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!supabase) {
-      router.replace(`/login?next=${encodeURIComponent(pathname || "/app/leads")}`);
-      return;
-    }
-
     let mounted = true;
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      if (!data.session) {
+    async function loadSupplierForSession() {
+      if (!supabase) {
         router.replace(`/login?next=${encodeURIComponent(pathname || "/app/leads")}`);
         return;
       }
-      setEmail(data.session.user.email ?? null);
-      setCheckingAuth(false);
-    });
 
-    const { data: authSub } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const session = sessionData.session;
+
       if (!mounted) return;
+
       if (!session) {
         router.replace(`/login?next=${encodeURIComponent(pathname || "/app/leads")}`);
         return;
       }
+
       setEmail(session.user.email ?? null);
+
+      const { data: supplierData, error } = await supabase
+        .from("suppliers")
+        .select("id,user_id,tier,plan,entitlement_source,subscription_status")
+        .eq("user_id", session.user.id)
+        .maybeSingle<SupplierRow>();
+
+      if (!mounted) return;
+
+      if (error) {
+        setSupplierError(`Could not load supplier profile (${error.message}).`);
+        setCheckingAuth(false);
+        return;
+      }
+
+      if (!supplierData) {
+        setSupplierError("No supplier profile found for this account.");
+        setCheckingAuth(false);
+        return;
+      }
+
+      setSupplier(supplierData);
+      setSupplierError(null);
       setCheckingAuth(false);
-    });
+    }
+
+    void loadSupplierForSession();
+
+    const { data: authSub } = supabase?.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+
+      if (!session) {
+        router.replace(`/login?next=${encodeURIComponent(pathname || "/app/leads")}`);
+        return;
+      }
+
+      setEmail(session.user.email ?? null);
+      setCheckingAuth(true);
+      void loadSupplierForSession();
+    }) ?? { data: { subscription: { unsubscribe: () => undefined } } };
 
     return () => {
       mounted = false;
@@ -78,6 +144,29 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-zinc-600">
           Checking account...
+        </div>
+      </div>
+    );
+  }
+
+  if (supplierError || !supplier) {
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center py-8">
+        <div className="w-full max-w-lg rounded-2xl border border-red-200 bg-white p-6 shadow-[0_20px_40px_-24px_rgba(16,24,40,0.25)]">
+          <h2 className="text-lg font-semibold text-zinc-900">Account setup required</h2>
+          <p className="mt-2 text-sm text-zinc-600">{supplierError ?? "Supplier profile missing."}</p>
+          <div className="mt-4 flex gap-3">
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+            >
+              Sign out
+            </button>
+            <Link href="/support" className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">
+              Contact support
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -126,7 +215,9 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
               disabled
               className="w-40 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500 md:w-56"
             />
-            <span className="inline-flex rounded-full border border-black/10 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">Plan status</span>
+            <span className="inline-flex rounded-full border border-black/10 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
+              {tierLabel(supplier.tier, supplier.plan)} - {sourceLabel(supplier.entitlement_source)}
+            </span>
           </div>
         </header>
         <div className="p-5">{children}</div>
