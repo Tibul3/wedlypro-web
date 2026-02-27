@@ -3,7 +3,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getSupabaseBrowserClient } from "../lib/supabaseClient";
+import { ensureSupplierProfile, getSupabaseBrowserClient } from "../lib/supabaseClient";
 
 function readNextPath(): string {
   if (typeof window === "undefined") return "/app/leads";
@@ -62,6 +62,11 @@ export default function SignupPage() {
     }
 
     if (data.session) {
+      const ensured = await ensureSupplierProfile(supabase, data.session.user);
+      if (!ensured.ok) {
+        setError(`Account setup failed: ${ensured.error}`);
+        return;
+      }
       router.replace(readNextPath());
       return;
     }

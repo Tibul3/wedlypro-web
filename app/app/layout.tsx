@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { getSupabaseBrowserClient } from "../lib/supabaseClient";
+import { ensureSupplierProfile, getSupabaseBrowserClient } from "../lib/supabaseClient";
 
 type NavItem = {
   href: string;
@@ -86,6 +86,13 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
       }
 
       setEmail(session.user.email ?? null);
+
+      const ensured = await ensureSupplierProfile(supabase, session.user);
+      if (!ensured.ok) {
+        setSupplierError(`Could not provision supplier profile (${ensured.error}).`);
+        setCheckingAuth(false);
+        return;
+      }
 
       const { data: supplierData, error } = await supabase
         .from("suppliers")

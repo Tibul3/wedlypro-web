@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getSupabaseBrowserClient } from "../lib/supabaseClient";
+import { ensureSupplierProfile, getSupabaseBrowserClient } from "../lib/supabaseClient";
 
 function readNextPath(): string {
   if (typeof window === "undefined") return "/app/leads";
@@ -24,10 +24,14 @@ export default function LoginPage() {
     if (!supabase) return;
     const nextPath = readNextPath();
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (data.session) {
-        router.replace(nextPath);
+    void supabase.auth.getSession().then(async ({ data }) => {
+      if (!data.session) return;
+      const ensured = await ensureSupplierProfile(supabase, data.session.user);
+      if (!ensured.ok) {
+        setError(`Account setup failed: ${ensured.error}`);
+        return;
       }
+      router.replace(nextPath);
     });
   }, [router, supabase]);
 
@@ -41,14 +45,29 @@ export default function LoginPage() {
     }
 
     setLoading(true);
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email: email.trim().toLowerCase(),
       password,
     });
-    setLoading(false);
 
     if (signInError) {
+      setLoading(false);
       setError(signInError.message);
+      return;
+    }
+
+    const user = data.user ?? data.session?.user;
+    if (!user) {
+      setLoading(false);
+      setError("Sign-in succeeded but user profile could not be loaded.");
+      return;
+    }
+
+    const ensured = await ensureSupplierProfile(supabase, user);
+    setLoading(false);
+
+    if (!ensured.ok) {
+      setError(`Account setup failed: ${ensured.error}`);
       return;
     }
 
