@@ -189,14 +189,14 @@ export default function LeadsPage() {
                           key={lead.id}
                           type="button"
                           onClick={() => setSelectedLeadId(lead.id)}
-                          className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                          className={`w-full min-w-0 overflow-hidden rounded-lg border px-3 py-2 text-left transition ${
                             isActive
                               ? "border-zinc-900 bg-zinc-900 text-white"
                               : "border-black/10 bg-white text-zinc-700 hover:bg-zinc-100"
                           }`}
                         >
-                          <p className="text-sm font-medium">{leadDisplayName(lead)}</p>
-                          <p className={`mt-1 text-xs ${isActive ? "text-zinc-200" : "text-zinc-500"}`}>
+                          <p className="truncate text-sm font-medium">{leadDisplayName(lead)}</p>
+                          <p className={`mt-1 truncate text-xs ${isActive ? "text-zinc-200" : "text-zinc-500"}`}>
                             {leadSubline(lead)}
                           </p>
                         </button>
