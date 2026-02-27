@@ -8,6 +8,8 @@ type ClientRow = {
   [key: string]: unknown;
 };
 
+const hiddenByDefaultStatuses = new Set(["archived", "converted"]);
+
 function toText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value.trim() || null;
@@ -23,12 +25,27 @@ function pickFirstText(record: ClientRow, keys: string[]): string | null {
   return null;
 }
 
+function normalizeStatus(rawStatus: string | null): string {
+  if (!rawStatus) return "unsorted";
+  return rawStatus.trim().toLowerCase().replace(/\s+/g, "_");
+}
+
 function formatLabel(key: string): string {
   return key
     .split("_")
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function isTechnicalField(key: string): boolean {
+  return (
+    key === "id" ||
+    key === "supplier_id" ||
+    key.endsWith("_id") ||
+    key.endsWith("_token") ||
+    key.startsWith("converted_from_")
+  );
 }
 
 function displayName(client: ClientRow): string {
@@ -59,6 +76,7 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [showArchivedConverted, setShowArchivedConverted] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -98,9 +116,24 @@ export default function ClientsPage() {
     };
   }, [supabase]);
 
+  const visibleClients = useMemo(() => {
+    if (showArchivedConverted) return clients;
+    return clients.filter((client) => {
+      const status = normalizeStatus(pickFirstText(client, ["status", "client_status", "stage"]));
+      return !hiddenByDefaultStatuses.has(status);
+    });
+  }, [clients, showArchivedConverted]);
+
+  useEffect(() => {
+    if (!selectedClientId) return;
+    if (!visibleClients.some((client) => client.id === selectedClientId)) {
+      setSelectedClientId(visibleClients[0]?.id ?? null);
+    }
+  }, [visibleClients, selectedClientId]);
+
   const selectedClient = useMemo(
-    () => clients.find((client) => client.id === selectedClientId) ?? null,
-    [clients, selectedClientId],
+    () => visibleClients.find((client) => client.id === selectedClientId) ?? null,
+    [visibleClients, selectedClientId],
   );
 
   if (loading) {
@@ -117,18 +150,29 @@ export default function ClientsPage() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-zinc-600">Read-only client list synced from Supabase.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-zinc-600">Read-only client list synced from Supabase.</p>
+        <label className="inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            checked={showArchivedConverted}
+            onChange={(e) => setShowArchivedConverted(e.target.checked)}
+          />
+          Show archived/converted
+        </label>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <section className="rounded-xl border border-black/10 bg-zinc-50 p-3">
-          <h2 className="text-sm font-semibold text-zinc-900">Clients ({clients.length})</h2>
+          <h2 className="text-sm font-semibold text-zinc-900">Clients ({visibleClients.length})</h2>
           <div className="mt-3 grid gap-2 md:grid-cols-2">
-            {clients.length === 0 ? (
+            {visibleClients.length === 0 ? (
               <p className="rounded-lg border border-dashed border-black/10 bg-white px-3 py-3 text-xs text-zinc-500">
                 No clients yet.
               </p>
             ) : (
-              clients.map((client) => {
+              visibleClients.map((client) => {
                 const active = selectedClientId === client.id;
                 return (
                   <button
@@ -159,7 +203,7 @@ export default function ClientsPage() {
           ) : (
             <dl className="mt-3 space-y-2 text-sm">
               {Object.entries(selectedClient)
-                .filter(([key, value]) => value !== null && value !== "" && key !== "supplier_id")
+                .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
                 .slice(0, 18)
                 .map(([key, value]) => (
                   <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
