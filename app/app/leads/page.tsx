@@ -15,6 +15,7 @@ type LeadColumn = {
 };
 
 const defaultStatusOrder = ["new", "discovery", "booked"];
+const hiddenByDefaultStatuses = new Set(["converted", "archived"]);
 
 function toText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -63,14 +64,8 @@ function leadDisplayName(lead: LeadRow): string {
 
 function leadSubline(lead: LeadRow): string {
   return (
-    pickFirstText(lead, [
-      "email",
-      "phone",
-      "event_date",
-      "wedding_date",
-      "created_at",
-      "source",
-    ]) ?? "No extra details"
+    pickFirstText(lead, ["email", "phone", "event_date", "wedding_date", "created_at", "source"]) ??
+    "No extra details"
   );
 }
 
@@ -100,6 +95,10 @@ function buildColumns(leads: LeadRow[]): LeadColumn[] {
   }));
 }
 
+function isTechnicalField(key: string): boolean {
+  return key === "id" || key === "supplier_id" || key.endsWith("_id") || key.endsWith("_token");
+}
+
 export default function LeadsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -107,6 +106,7 @@ export default function LeadsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [showArchivedConverted, setShowArchivedConverted] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -146,10 +146,26 @@ export default function LeadsPage() {
     };
   }, [supabase]);
 
-  const columns = useMemo(() => buildColumns(leads), [leads]);
+  const visibleLeads = useMemo(() => {
+    if (showArchivedConverted) return leads;
+    return leads.filter((lead) => {
+      const status = normalizeStatus(pickFirstText(lead, ["status", "lead_status", "stage"]));
+      return !hiddenByDefaultStatuses.has(status);
+    });
+  }, [leads, showArchivedConverted]);
+
+  const columns = useMemo(() => buildColumns(visibleLeads), [visibleLeads]);
+
+  useEffect(() => {
+    if (!selectedLeadId) return;
+    if (!visibleLeads.some((lead) => lead.id === selectedLeadId)) {
+      setSelectedLeadId(visibleLeads[0]?.id ?? null);
+    }
+  }, [visibleLeads, selectedLeadId]);
+
   const selectedLead = useMemo(
-    () => leads.find((lead) => lead.id === selectedLeadId) ?? null,
-    [leads, selectedLeadId],
+    () => visibleLeads.find((lead) => lead.id === selectedLeadId) ?? null,
+    [visibleLeads, selectedLeadId],
   );
 
   if (loading) {
@@ -166,7 +182,18 @@ export default function LeadsPage() {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm text-zinc-600">Read-only board synced from Supabase.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-zinc-600">Read-only board synced from Supabase.</p>
+        <label className="inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            checked={showArchivedConverted}
+            onChange={(e) => setShowArchivedConverted(e.target.checked)}
+          />
+          Show archived/converted
+        </label>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="overflow-x-auto">
@@ -216,7 +243,7 @@ export default function LeadsPage() {
           ) : (
             <dl className="mt-3 space-y-2 text-sm">
               {Object.entries(selectedLead)
-                .filter(([key, value]) => value !== null && value !== "" && key !== "supplier_id")
+                .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
                 .slice(0, 18)
                 .map(([key, value]) => (
                   <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
