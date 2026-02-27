@@ -17,6 +17,9 @@ type SupplierRow = {
   plan: string | null;
   entitlement_source: string | null;
   subscription_status: string | null;
+  billing_enforcement: string | null;
+  entitlement_expires_at: string | null;
+  trial_ends_at: string | null;
 };
 
 const navItems: NavItem[] = [
@@ -54,6 +57,31 @@ function tierLabel(tier: string | null, plan: string | null): string {
   if (tier === "essentials") return "Essentials";
   if (plan === "pro") return "Professional";
   return "Free";
+}
+
+function hasBillingAccess(supplier: SupplierRow): boolean {
+  const enforcement = supplier.billing_enforcement ?? "enforced";
+  if (enforcement === "grandfathered") return true;
+
+  const source = supplier.entitlement_source ?? "manual";
+  if (source !== "ios_iap" && source !== "web_stripe") return false;
+
+  const status = supplier.subscription_status ?? "inactive";
+  const now = Date.now();
+  const trialEndsAt = supplier.trial_ends_at ? new Date(supplier.trial_ends_at).getTime() : null;
+  const entitlementExpiresAt = supplier.entitlement_expires_at
+    ? new Date(supplier.entitlement_expires_at).getTime()
+    : null;
+
+  if (status === "trialing") {
+    return trialEndsAt === null || trialEndsAt > now;
+  }
+
+  if (status === "active" || status === "grace_period") {
+    return entitlementExpiresAt === null || entitlementExpiresAt > now;
+  }
+
+  return false;
 }
 
 export default function ProductLayout({ children }: { children: React.ReactNode }) {
@@ -96,7 +124,7 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
 
       const { data: supplierData, error } = await supabase
         .from("suppliers")
-        .select("id,user_id,tier,plan,entitlement_source,subscription_status")
+        .select("id,user_id,tier,plan,entitlement_source,subscription_status,billing_enforcement,entitlement_expires_at,trial_ends_at")
         .eq("user_id", session.user.id)
         .maybeSingle<SupplierRow>();
 
@@ -114,9 +142,15 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
         return;
       }
 
+      const blocked = !hasBillingAccess(supplierData);
+
       setSupplier(supplierData);
       setSupplierError(null);
       setCheckingAuth(false);
+
+      if (blocked && pathname && !pathname.startsWith("/app/billing")) {
+        router.replace("/app/billing");
+      }
     }
 
     void loadSupplierForSession();
