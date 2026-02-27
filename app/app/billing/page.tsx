@@ -11,6 +11,14 @@ type SupplierBillingRow = {
   subscription_status: string | null;
 };
 
+type BillingActionPayload = {
+  ok?: boolean;
+  action?: "checkout" | "portal";
+  url?: string;
+  error?: string;
+  code?: string;
+};
+
 function sourceLabel(source: string | null): string {
   if (source === "ios_iap") return "Apple In-App Purchase";
   if (source === "web_stripe") return "Web Stripe";
@@ -31,7 +39,7 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [runningAction, setRunningAction] = useState(false);
+  const [runningAction, setRunningAction] = useState<"essentials" | "professional" | "portal" | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -83,18 +91,18 @@ export default function BillingPage() {
     };
   }, [supabase]);
 
-  const runGuardedCheckoutAction = async () => {
+  const runBillingAction = async (action: "checkout" | "portal", plan?: "essentials" | "professional") => {
     if (!supabase) return;
 
     setActionMessage(null);
-    setRunningAction(true);
+    setRunningAction(action === "portal" ? "portal" : plan ?? "essentials");
 
     const {
       data: { session },
     } = await supabase.auth.getSession();
 
     if (!session) {
-      setRunningAction(false);
+      setRunningAction(null);
       setActionMessage("Session expired. Please sign in again.");
       return;
     }
@@ -105,36 +113,28 @@ export default function BillingPage() {
         "Content-Type": "application/json",
         Authorization: `Bearer ${session.access_token}`,
       },
+      body: JSON.stringify({ action, plan }),
     });
 
-    const payload = (await response.json()) as {
-      error?: string;
-      message?: string;
-      code?: string;
-      action?: string;
-      ok?: boolean;
-    };
+    const payload = (await response.json()) as BillingActionPayload;
 
-    if (response.status === 409 && payload.code === "IOS_MANAGED") {
-      setActionMessage("This account is managed through Apple. Use your iPhone App Store subscription settings.");
-      setRunningAction(false);
+    if (!response.ok) {
+      if (response.status === 409 && payload.code === "IOS_MANAGED") {
+        setActionMessage("This account is managed through Apple. Use your iPhone App Store subscription settings.");
+      } else {
+        setActionMessage(payload.error ?? "Billing action failed.");
+      }
+      setRunningAction(null);
       return;
     }
 
-    if (response.status === 200 && payload.action === "portal") {
-      setActionMessage("Web billing portal connection is next. Your account is already on web billing.");
-      setRunningAction(false);
+    if (payload.url) {
+      window.location.href = payload.url;
       return;
     }
 
-    if (response.status === 501 && payload.code === "WEB_CHECKOUT_NOT_READY") {
-      setActionMessage("Web checkout is not live yet. This guard is active to prevent incorrect billing routes.");
-      setRunningAction(false);
-      return;
-    }
-
-    setActionMessage(payload.error ?? payload.message ?? "Billing action failed.");
-    setRunningAction(false);
+    setRunningAction(null);
+    setActionMessage("Billing action completed.");
   };
 
   if (loading) return <p className="text-sm text-zinc-600">Loading billing details...</p>;
@@ -188,24 +188,36 @@ export default function BillingPage() {
           <p className="mt-2 text-sm text-zinc-600">
             This account is billed through Apple. Web checkout is disabled for Apple-managed subscriptions.
           </p>
-        ) : isWebStripe ? (
-          <p className="mt-2 text-sm text-zinc-600">
-            This account is on web billing. Stripe customer portal wiring is the next implementation step.
-          </p>
         ) : (
-          <p className="mt-2 text-sm text-zinc-600">
-            Web trial/checkout is not connected yet. The guard endpoint is live and ready for Stripe wiring.
-          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => runBillingAction("checkout", "essentials")}
+              disabled={runningAction !== null}
+              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {runningAction === "essentials" ? "Please wait..." : "Start Essentials (Web)"}
+            </button>
+            <button
+              type="button"
+              onClick={() => runBillingAction("checkout", "professional")}
+              disabled={runningAction !== null}
+              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {runningAction === "professional" ? "Please wait..." : "Start Professional (Web)"}
+            </button>
+            {isWebStripe ? (
+              <button
+                type="button"
+                onClick={() => runBillingAction("portal")}
+                disabled={runningAction !== null}
+                className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningAction === "portal" ? "Please wait..." : "Manage Stripe billing"}
+              </button>
+            ) : null}
+          </div>
         )}
-
-        <button
-          type="button"
-          onClick={runGuardedCheckoutAction}
-          disabled={runningAction}
-          className="mt-4 rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {runningAction ? "Please wait..." : "Run billing action check"}
-        </button>
 
         {actionMessage ? (
           <p className="mt-3 rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">{actionMessage}</p>
