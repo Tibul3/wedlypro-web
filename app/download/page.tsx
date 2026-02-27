@@ -12,14 +12,16 @@ export default function DownloadPage() {
       <div className="rounded-2xl border border-black/10 bg-white p-8 shadow-[0_20px_40px_-24px_rgba(16,24,40,0.35)]">
         <h1 className="text-3xl font-semibold tracking-tight text-zinc-900">Wedly Pro for iPhone</h1>
         <p className="mt-4 text-sm leading-6 text-zinc-600">
-          The App Store listing is being prepared. Please check back soon.
+Download Wedly Pro on the App Store using the button below.
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
           <a
-            href="#"
+            href="https://apps.apple.com/gb/app/wedly-pro/id6759190864"
+            target="_blank"
+            rel="noreferrer"
             className="btn-primary"
           >
-            App Store (Coming soon)
+            Download on the App Store
           </a>
           <Link
             href="/"

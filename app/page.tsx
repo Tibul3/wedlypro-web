@@ -100,9 +100,9 @@ export default function HomePage() {
               documents in one polished mobile workflow.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <Link href="/download" className="btn-primary">
+              <a href="https://apps.apple.com/gb/app/wedly-pro/id6759190864" target="_blank" rel="noreferrer" className="btn-primary">
                 Download on the App Store
-              </Link>
+              </a>
               <Link href="/support" className="btn-secondary">
                 Contact
               </Link>
