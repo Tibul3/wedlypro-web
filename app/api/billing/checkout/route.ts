@@ -1,6 +1,13 @@
+export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import Stripe from "stripe";
+import {
+  type PlanTier,
+  findSupplierByUserId,
+  getPriceForPlan,
+  getStripeClient,
+} from "../../../lib/server/billing";
 
 type SupplierBillingRow = {
   id: string;
@@ -12,28 +19,14 @@ type SupplierBillingRow = {
 
 type CheckoutRequest = {
   action?: "checkout" | "portal";
-  plan?: "essentials" | "professional";
+  plan?: PlanTier;
 };
-
-function getStripeClient(): Stripe | null {
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) return null;
-  return new Stripe(key);
-}
 
 function getAppOrigin(request: Request): string {
   const envOrigin = process.env.NEXT_PUBLIC_APP_URL;
   if (envOrigin) return envOrigin;
   const url = new URL(request.url);
   return `${url.protocol}//${url.host}`;
-}
-
-async function findCustomerId(stripe: Stripe, email: string | undefined, supabaseUserId: string): Promise<string | null> {
-  if (!email) return null;
-  const customers = await stripe.customers.list({ email, limit: 10 });
-  const exactMatch = customers.data.find((customer) => customer.metadata?.supabase_user_id === supabaseUserId);
-  if (exactMatch) return exactMatch.id;
-  return customers.data[0]?.id ?? null;
 }
 
 export async function POST(request: Request) {
@@ -114,8 +107,14 @@ export async function POST(request: Request) {
   const returnUrl = `${origin}/app/billing`;
 
   if (action === "portal") {
-    const customerId = await findCustomerId(stripe, user.email, user.id);
-    if (!customerId) {
+    const byUser = await findSupplierByUserId(user.id);
+    if (byUser.error) return NextResponse.json({ error: byUser.error }, { status: 500 });
+
+    const customers = await stripe.customers.list({ email: user.email, limit: 10 });
+    const exactMatch = customers.data.find((customer) => customer.metadata?.supabase_user_id === user.id);
+    const customer = exactMatch ?? customers.data[0] ?? null;
+
+    if (!customer) {
       return NextResponse.json(
         {
           error: "No Stripe customer found for this account yet.",
@@ -126,7 +125,7 @@ export async function POST(request: Request) {
     }
 
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: customerId,
+      customer: customer.id,
       return_url: returnUrl,
     });
 
@@ -134,29 +133,25 @@ export async function POST(request: Request) {
   }
 
   if (supplier.entitlement_source === "web_stripe") {
-    const customerId = await findCustomerId(stripe, user.email, user.id);
-    if (customerId) {
+    const customers = await stripe.customers.list({ email: user.email, limit: 10 });
+    const exactMatch = customers.data.find((customer) => customer.metadata?.supabase_user_id === user.id);
+    const customer = exactMatch ?? customers.data[0] ?? null;
+
+    if (customer) {
       const portalSession = await stripe.billingPortal.sessions.create({
-        customer: customerId,
+        customer: customer.id,
         return_url: returnUrl,
       });
       return NextResponse.json({ ok: true, action: "portal", url: portalSession.url });
     }
   }
 
-  const essentialsPriceId = process.env.STRIPE_PRICE_ESSENTIALS_MONTHLY;
-  const professionalPriceId = process.env.STRIPE_PRICE_PROFESSIONAL_MONTHLY;
-
-  const priceId = plan === "professional" ? professionalPriceId : essentialsPriceId;
-
+  const priceId = getPriceForPlan(plan);
   if (!priceId) {
-    return NextResponse.json(
-      {
-        error: `Missing Stripe price configuration for ${plan}.`,
-      },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: `Missing Stripe price configuration for ${plan}.` }, { status: 500 });
   }
+
+  const shouldApplyTrial = supplier.entitlement_source !== "web_stripe" && supplier.subscription_status !== "active";
 
   const checkoutSession = await stripe.checkout.sessions.create({
     mode: "subscription",
@@ -172,6 +167,7 @@ export async function POST(request: Request) {
       requested_plan: plan,
     },
     subscription_data: {
+      trial_period_days: shouldApplyTrial ? 14 : undefined,
       metadata: {
         supabase_user_id: user.id,
         supplier_id: supplier.id,
