@@ -107,6 +107,14 @@ export default function HomePage() {
                 Contact
               </Link>
             </div>
+            <div className="mt-4 flex flex-wrap items-center gap-4 text-sm">
+              <Link className="text-zinc-900 underline" href="/login">
+                Log in to Web App
+              </Link>
+              <Link className="text-zinc-900 underline" href="/signup">
+                Sign up for Web Access
+              </Link>
+            </div>
             <div className="mt-3">
               <span className="badge-subtle">Android app coming soon</span>
             </div>

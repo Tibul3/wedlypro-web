@@ -86,6 +86,12 @@ export default function RootLayout({
               <Link className="hover:text-zinc-900" href="/support">
                 Contact
               </Link>
+              <Link className="hover:text-zinc-900" href="/login">
+                Log in
+              </Link>
+              <Link className="rounded-full border border-black/10 px-3 py-1.5 text-zinc-900 transition hover:bg-zinc-50" href="/signup">
+                Sign up
+              </Link>
             </nav>
           </div>
         </header>
