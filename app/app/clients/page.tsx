@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import Link from "next/link";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type ClientRow = {
@@ -28,6 +29,11 @@ type InspirationImage = {
   caption: string | null;
   preview_url: string | null;
   created_at: string | null;
+};
+
+type InspirationViewer = {
+  url: string;
+  caption: string;
 };
 
 const hiddenByDefaultStatuses = new Set(["archived", "converted"]);
@@ -155,6 +161,8 @@ export default function ClientsPage() {
   const [deletingInspirationId, setDeletingInspirationId] = useState<string | null>(null);
   const [inspirationCaption, setInspirationCaption] = useState("");
   const [inspirationError, setInspirationError] = useState<string | null>(null);
+  const [refreshingImageId, setRefreshingImageId] = useState<string | null>(null);
+  const [viewer, setViewer] = useState<InspirationViewer | null>(null);
 
   const loadData = async () => {
     if (!supabase) {
@@ -268,9 +276,13 @@ export default function ClientsPage() {
 
     const hydrated = await Promise.all(
       rows.map(async (row) => {
+        if (row.storage_path.startsWith("http://") || row.storage_path.startsWith("https://")) {
+          return { ...row, preview_url: row.storage_path };
+        }
+        const normalizedPath = row.storage_path.startsWith("/") ? row.storage_path.slice(1) : row.storage_path;
         const { data: signed, error: signedError } = await supabase.storage
           .from(INSPIRATION_BUCKET)
-          .createSignedUrl(row.storage_path, 3600);
+          .createSignedUrl(normalizedPath, 3600);
 
         return {
           ...row,
@@ -457,6 +469,29 @@ export default function ClientsPage() {
     setDeletingInspirationId(null);
   };
 
+  const refreshInspirationPreview = async (imageId: string) => {
+    if (!supabase) return;
+    const image = inspirationImages.find((item) => item.id === imageId);
+    if (!image) return;
+    if (image.storage_path.startsWith("http://") || image.storage_path.startsWith("https://")) return;
+
+    setRefreshingImageId(imageId);
+    const normalizedPath = image.storage_path.startsWith("/") ? image.storage_path.slice(1) : image.storage_path;
+    const { data: signed, error: signedError } = await supabase.storage
+      .from(INSPIRATION_BUCKET)
+      .createSignedUrl(normalizedPath, 3600);
+    setRefreshingImageId(null);
+
+    if (signedError || !signed?.signedUrl) {
+      setInspirationError("Unable to refresh this image preview.");
+      return;
+    }
+
+    setInspirationImages((prev) =>
+      prev.map((item) => (item.id === imageId ? { ...item, preview_url: signed.signedUrl } : item)),
+    );
+  };
+
   if (loading) {
     return <p className="text-sm text-zinc-600">Loading clients...</p>;
   }
@@ -531,15 +566,25 @@ export default function ClientsPage() {
         <aside className="h-fit rounded-xl border border-black/10 bg-white p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-zinc-900">{isEditing ? "Edit client" : "Client details"}</h3>
-            {!isEditing && selectedClient ? (
-              <button
-                type="button"
-                onClick={startEdit}
-                className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
-              >
-                Edit
-              </button>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {!isEditing && selectedClient ? (
+                <Link
+                  href={`/app/clients/${selectedClient.id}`}
+                  className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+                >
+                  Open page
+                </Link>
+              ) : null}
+              {!isEditing && selectedClient ? (
+                <button
+                  type="button"
+                  onClick={startEdit}
+                  className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+                >
+                  Edit
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {isEditing ? (
@@ -699,13 +744,28 @@ export default function ClientsPage() {
                         <img
                           src={image.preview_url}
                           alt={image.caption ?? image.file_name ?? "Inspiration"}
-                          className="h-24 w-full rounded-md object-cover"
+                          className="h-24 w-full cursor-zoom-in rounded-md object-cover"
+                          onClick={() =>
+                            setViewer({
+                              url: image.preview_url as string,
+                              caption: image.caption || image.file_name || "Inspiration",
+                            })
+                          }
+                          onError={() => void refreshInspirationPreview(image.id)}
                         />
                       ) : (
                         <div className="flex h-24 items-center justify-center rounded-md bg-zinc-200 text-xs text-zinc-600">
                           No preview
                         </div>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => void refreshInspirationPreview(image.id)}
+                        disabled={refreshingImageId === image.id}
+                        className="mt-1 rounded-md border border-black/10 px-2 py-1 text-[11px] text-zinc-700 disabled:opacity-60"
+                      >
+                        {refreshingImageId === image.id ? "Refreshing..." : "Refresh preview"}
+                      </button>
                       <p className="mt-1 break-words text-[11px] text-zinc-600">
                         {image.caption || image.file_name || "No caption"}
                       </p>
@@ -729,6 +789,24 @@ export default function ClientsPage() {
           )}
         </aside>
       </div>
+
+      {viewer ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setViewer(null)}>
+          <div className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white" onClick={(e) => e.stopPropagation()}>
+            <img src={viewer.url} alt={viewer.caption} className="max-h-[80vh] w-full object-contain bg-black" />
+            <div className="flex items-center justify-between gap-3 p-3">
+              <p className="text-sm text-zinc-700">{viewer.caption}</p>
+              <button
+                type="button"
+                onClick={() => setViewer(null)}
+                className="rounded-lg border border-black/10 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
