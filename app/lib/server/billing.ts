@@ -97,6 +97,28 @@ export async function findSupplierByEmail(email: string) {
   return { supplier: data ?? null, error: error?.message ?? null };
 }
 
+export async function hasProcessedBillingWebhookEvent(eventId: string): Promise<boolean> {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return false;
+
+  const { data, error } = await supabase
+    .from("billing_webhook_events")
+    .select("event_id,delivery_status")
+    .eq("provider", "stripe")
+    .eq("event_id", eventId)
+    .maybeSingle<{ event_id: string; delivery_status: string }>();
+
+  if (error) {
+    const missingTable = /relation .*billing_webhook_events.* does not exist/i.test(error.message);
+    if (!missingTable) {
+      console.warn("billing_webhook_events lookup failed", error.message);
+    }
+    return false;
+  }
+
+  return data?.delivery_status === "processed";
+}
+
 export async function applyWebStripeEntitlement(params: {
   userId: string;
   plan: PlanTier;
@@ -143,20 +165,26 @@ export async function logBillingWebhookEvent(input: BillingWebhookLogInput): Pro
   const supabase = getSupabaseAdminClient();
   if (!supabase) return;
 
-  const { error } = await supabase.from("billing_webhook_events").insert({
-    event_id: input.eventId,
-    event_type: input.eventType,
-    provider: "stripe",
-    delivery_status: input.deliveryStatus,
-    error_message: input.errorMessage ?? null,
-    payload: input.payload ?? null,
-    supplier_user_id: input.supplierUserId ?? null,
-  });
+  const { error } = await supabase.from("billing_webhook_events").upsert(
+    {
+      event_id: input.eventId,
+      event_type: input.eventType,
+      provider: "stripe",
+      delivery_status: input.deliveryStatus,
+      error_message: input.errorMessage ?? null,
+      payload: input.payload ?? null,
+      supplier_user_id: input.supplierUserId ?? null,
+    },
+    {
+      onConflict: "provider,event_id",
+      ignoreDuplicates: false,
+    },
+  );
 
   if (error) {
     const missingTable = /relation .*billing_webhook_events.* does not exist/i.test(error.message);
     if (!missingTable) {
-      console.warn("billing_webhook_events insert failed", error.message);
+      console.warn("billing_webhook_events upsert failed", error.message);
     }
   }
 }
