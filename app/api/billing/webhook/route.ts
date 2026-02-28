@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import {
+  findSupplierByEmail,
   getStripeClient,
   hasProcessedBillingWebhookEvent,
   logBillingWebhookEvent,
@@ -23,6 +24,11 @@ async function resolveUserIdFromSubscription(
   if (customer.deleted) return null;
 
   if (customer.metadata?.supabase_user_id) return customer.metadata.supabase_user_id;
+
+  if (customer.email) {
+    const supplierByEmail = await findSupplierByEmail(customer.email);
+    if (supplierByEmail.supplier?.user_id) return supplierByEmail.supplier.user_id;
+  }
 
   return null;
 }
