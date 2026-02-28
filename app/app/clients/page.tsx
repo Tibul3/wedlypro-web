@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type ClientRow = {
@@ -21,8 +21,19 @@ type ClientForm = {
   notes: string;
 };
 
+type InspirationImage = {
+  id: string;
+  storage_path: string;
+  file_name: string | null;
+  caption: string | null;
+  preview_url: string | null;
+  created_at: string | null;
+};
+
 const hiddenByDefaultStatuses = new Set(["archived", "converted"]);
 const statusOptions = ["active", "archived", "converted"];
+const INSPIRATION_BUCKET = "inspiration";
+const MAX_INSPIRATION_IMAGES = 20;
 
 const emptyForm: ClientForm = {
   status: "active",
@@ -138,6 +149,12 @@ export default function ClientsPage() {
 
   const [editingClientId, setEditingClientId] = useState<string | null>(null);
   const [form, setForm] = useState<ClientForm>(emptyForm);
+  const [inspirationImages, setInspirationImages] = useState<InspirationImage[]>([]);
+  const [inspirationLoading, setInspirationLoading] = useState(false);
+  const [uploadingInspiration, setUploadingInspiration] = useState(false);
+  const [deletingInspirationId, setDeletingInspirationId] = useState<string | null>(null);
+  const [inspirationCaption, setInspirationCaption] = useState("");
+  const [inspirationError, setInspirationError] = useState<string | null>(null);
 
   const loadData = async () => {
     if (!supabase) {
@@ -220,6 +237,61 @@ export default function ClientsPage() {
     () => visibleClients.find((client) => client.id === selectedClientId) ?? null,
     [visibleClients, selectedClientId],
   );
+
+  const loadInspirations = async (clientId: string) => {
+    if (!supabase || !supplierId) return;
+    setInspirationLoading(true);
+    setInspirationError(null);
+
+    const { data, error: queryError } = await supabase
+      .from("client_inspiration_images")
+      .select("id,storage_path,file_name,caption,created_at")
+      .eq("client_id", clientId)
+      .eq("supplier_id", supplierId)
+      .order("created_at", { ascending: false });
+
+    if (queryError) {
+      setInspirationImages([]);
+      setInspirationLoading(false);
+      setInspirationError(queryError.message);
+      return;
+    }
+
+    const rows =
+      (data as Array<{
+        id: string;
+        storage_path: string;
+        file_name: string | null;
+        caption: string | null;
+        created_at: string | null;
+      }> | null) ?? [];
+
+    const hydrated = await Promise.all(
+      rows.map(async (row) => {
+        const { data: signed, error: signedError } = await supabase.storage
+          .from(INSPIRATION_BUCKET)
+          .createSignedUrl(row.storage_path, 3600);
+
+        return {
+          ...row,
+          preview_url: signedError ? null : signed.signedUrl,
+        };
+      }),
+    );
+
+    setInspirationImages(hydrated);
+    setInspirationLoading(false);
+  };
+
+  useEffect(() => {
+    if (!selectedClient?.id) {
+      setInspirationImages([]);
+      setInspirationCaption("");
+      setInspirationError(null);
+      return;
+    }
+    void loadInspirations(selectedClient.id);
+  }, [selectedClient?.id, supplierId]);
 
   const startCreate = () => {
     setEditingClientId("new");
@@ -304,6 +376,85 @@ export default function ClientsPage() {
     }
 
     setSaving(false);
+  };
+
+  const handleUploadInspiration = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = "";
+    if (!file || !supabase || !supplierId || !selectedClient?.id) return;
+
+    if (!file.type.startsWith("image/")) {
+      setInspirationError("Only image files are allowed.");
+      return;
+    }
+    if (inspirationImages.length >= MAX_INSPIRATION_IMAGES) {
+      setInspirationError(`Maximum ${MAX_INSPIRATION_IMAGES} images per client.`);
+      return;
+    }
+
+    setInspirationError(null);
+    setUploadingInspiration(true);
+
+    const fileExtension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const fileSuffix = Math.random().toString(36).slice(2, 8);
+    const storagePath = `${supplierId}/${selectedClient.id}/web-inspo-${Date.now()}-${fileSuffix}.${fileExtension}`;
+
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from(INSPIRATION_BUCKET)
+        .upload(storagePath, file, {
+          upsert: false,
+          contentType: file.type,
+        });
+
+      if (uploadError) {
+        setUploadingInspiration(false);
+        setInspirationError(uploadError.message);
+        return;
+      }
+
+      const { error: insertError } = await supabase.from("client_inspiration_images").insert({
+        supplier_id: supplierId,
+        client_id: selectedClient.id,
+        storage_path: storagePath,
+        file_name: file.name,
+        caption: inspirationCaption.trim() || null,
+      });
+
+      if (insertError) {
+        await supabase.storage.from(INSPIRATION_BUCKET).remove([storagePath]);
+        setUploadingInspiration(false);
+        setInspirationError(insertError.message);
+        return;
+      }
+
+      setInspirationCaption("");
+      await loadInspirations(selectedClient.id);
+    } finally {
+      setUploadingInspiration(false);
+    }
+  };
+
+  const handleDeleteInspiration = async (image: InspirationImage) => {
+    if (!supabase || !supplierId) return;
+    setInspirationError(null);
+    setDeletingInspirationId(image.id);
+
+    const { error: deleteError } = await supabase
+      .from("client_inspiration_images")
+      .delete()
+      .eq("id", image.id)
+      .eq("supplier_id", supplierId);
+
+    if (deleteError) {
+      setDeletingInspirationId(null);
+      setInspirationError(deleteError.message);
+      return;
+    }
+
+    await supabase.storage.from(INSPIRATION_BUCKET).remove([image.storage_path]);
+    setInspirationImages((prev) => prev.filter((item) => item.id !== image.id));
+    setDeletingInspirationId(null);
   };
 
   if (loading) {
@@ -496,17 +647,85 @@ export default function ClientsPage() {
           ) : !selectedClient ? (
             <p className="text-sm text-zinc-600">Select a client to view details.</p>
           ) : (
-            <dl className="space-y-2 text-sm">
-              {Object.entries(selectedClient)
-                .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                .slice(0, 18)
-                .map(([key, value]) => (
-                  <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-                  </div>
-                ))}
-            </dl>
+            <div className="space-y-4">
+              <dl className="space-y-2 text-sm">
+                {Object.entries(selectedClient)
+                  .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
+                  .slice(0, 18)
+                  .map(([key, value]) => (
+                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
+                      <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
+                    </div>
+                  ))}
+              </dl>
+
+              <section className="rounded-lg border border-black/10 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">
+                    Inspirations ({inspirationImages.length})
+                  </h4>
+                </div>
+
+                <label className="block text-xs text-zinc-600">
+                  Caption (optional)
+                  <input
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                    value={inspirationCaption}
+                    onChange={(e) => setInspirationCaption(e.target.value)}
+                    placeholder="e.g. Floral arch reference"
+                    maxLength={140}
+                  />
+                </label>
+
+                <label className="mt-2 inline-flex cursor-pointer items-center rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50">
+                  {uploadingInspiration ? "Uploading..." : "Add inspiration image"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleUploadInspiration}
+                    disabled={uploadingInspiration || inspirationImages.length >= MAX_INSPIRATION_IMAGES}
+                  />
+                </label>
+
+                {inspirationError ? <p className="mt-2 text-xs text-red-700">{inspirationError}</p> : null}
+                {inspirationLoading ? <p className="mt-2 text-xs text-zinc-500">Loading images...</p> : null}
+
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  {inspirationImages.map((image) => (
+                    <div key={image.id} className="rounded-lg border border-black/10 bg-zinc-50 p-2">
+                      {image.preview_url ? (
+                        <img
+                          src={image.preview_url}
+                          alt={image.caption ?? image.file_name ?? "Inspiration"}
+                          className="h-24 w-full rounded-md object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-24 items-center justify-center rounded-md bg-zinc-200 text-xs text-zinc-600">
+                          No preview
+                        </div>
+                      )}
+                      <p className="mt-1 break-words text-[11px] text-zinc-600">
+                        {image.caption || image.file_name || "No caption"}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteInspiration(image)}
+                        disabled={deletingInspirationId === image.id}
+                        className="mt-1 rounded-md border border-red-200 px-2 py-1 text-[11px] text-red-700 disabled:opacity-60"
+                      >
+                        {deletingInspirationId === image.id ? "Removing..." : "Remove"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {!inspirationLoading && inspirationImages.length === 0 ? (
+                  <p className="mt-2 text-xs text-zinc-500">No inspiration images yet.</p>
+                ) : null}
+              </section>
+            </div>
           )}
         </aside>
       </div>
