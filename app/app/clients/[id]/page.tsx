@@ -10,6 +10,18 @@ type ClientRow = {
   [key: string]: unknown;
 };
 
+type ClientForm = {
+  status: string;
+  full_name: string;
+  partner_name: string;
+  partner_phone: string;
+  email: string;
+  phone: string;
+  wedding_date: string;
+  venue: string;
+  notes: string;
+};
+
 type InspirationImage = {
   id: string;
   storage_path: string;
@@ -25,6 +37,7 @@ type InspirationViewer = {
 
 const INSPIRATION_BUCKET = "inspiration";
 const MAX_INSPIRATION_IMAGES = 20;
+const clientStatusOptions = ["active", "archived", "converted"];
 
 function formatLabel(key: string): string {
   return key
@@ -44,6 +57,8 @@ function isTechnicalField(key: string): boolean {
   return (
     key === "id" ||
     key === "supplier_id" ||
+    key === "created_at" ||
+    key === "updated_at" ||
     key.endsWith("_id") ||
     key.endsWith("_token") ||
     key.startsWith("converted_from_")
@@ -60,6 +75,33 @@ function extractHomeAddress(notes: string | null): string {
   if (!notes) return "";
   const match = notes.match(/^Home address:\s*(.+)$/im);
   return match?.[1]?.trim() ?? "";
+}
+
+function stripStructuredClientNotes(notes: string | null): string {
+  if (!notes) return "";
+  return notes
+    .split("\n")
+    .filter((line) => {
+      const normalized = line.trim().toLowerCase();
+      return !normalized.startsWith("partner phone:") && !normalized.startsWith("home address:");
+    })
+    .join("\n")
+    .trim();
+}
+
+function formFromClient(client: ClientRow): ClientForm {
+  const rawNotes = pickFirstText(client, ["notes"]);
+  return {
+    status: pickFirstText(client, ["status"]) ?? "active",
+    full_name: pickFirstText(client, ["name_1", "name", "client_name"]) ?? "",
+    partner_name: pickFirstText(client, ["name_2"]) ?? "",
+    partner_phone: extractPartnerPhone(rawNotes),
+    email: pickFirstText(client, ["email"]) ?? "",
+    phone: pickFirstText(client, ["phone"]) ?? "",
+    wedding_date: pickFirstText(client, ["wedding_date", "event_date"]) ?? "",
+    venue: pickFirstText(client, ["venue"]) ?? "",
+    notes: stripStructuredClientNotes(rawNotes),
+  };
 }
 
 function toText(value: unknown): string | null {
@@ -124,6 +166,19 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<ClientRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [form, setForm] = useState<ClientForm>({
+    status: "active",
+    full_name: "",
+    partner_name: "",
+    partner_phone: "",
+    email: "",
+    phone: "",
+    wedding_date: "",
+    venue: "",
+    notes: "",
+  });
 
   const [inspirationImages, setInspirationImages] = useState<InspirationImage[]>([]);
   const [inspirationLoading, setInspirationLoading] = useState(false);
@@ -228,6 +283,7 @@ export default function ClientDetailPage() {
       }
 
       setClient(clientData);
+      setForm(formFromClient(clientData));
       await loadInspirations(clientId, supplier.id);
       if (!mounted) return;
       setLoading(false);
@@ -340,6 +396,48 @@ export default function ClientDetailPage() {
     setDeletingInspirationId(null);
   };
 
+  const handleSaveClient = async () => {
+    if (!supabase || !supplierId || !clientId) return;
+    if (!form.full_name.trim()) {
+      setError("Client name is required.");
+      return;
+    }
+
+    setError(null);
+    setSaving(true);
+
+    const notesParts: string[] = [];
+    if (form.notes.trim()) notesParts.push(form.notes.trim());
+    if (form.partner_phone.trim()) notesParts.push(`Partner phone: ${form.partner_phone.trim()}`);
+
+    const payload = {
+      status: form.status.trim().toLowerCase() || "active",
+      name_1: form.full_name.trim(),
+      name_2: form.partner_name.trim() || null,
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      wedding_date: form.wedding_date || null,
+      venue: form.venue.trim() || null,
+      notes: notesParts.length ? notesParts.join("\n") : null,
+    };
+
+    const { error: updateError } = await supabase
+      .from("clients")
+      .update(payload)
+      .eq("id", clientId)
+      .eq("supplier_id", supplierId);
+
+    setSaving(false);
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    setClient((prev) => (prev ? { ...prev, ...payload } : prev));
+    setIsEditing(false);
+  };
+
   if (loading) return <p className="text-sm text-zinc-600">Loading client...</p>;
   if (error || !client) {
     return (
@@ -356,34 +454,158 @@ export default function ClientDetailPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <h2 className="text-lg font-semibold text-zinc-900">Client details</h2>
-        <Link href="/app/clients" className="rounded-lg border border-black/10 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50">
-          Back to clients
-        </Link>
+        <div className="flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <button
+                type="button"
+                onClick={handleSaveClient}
+                disabled={saving}
+                className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs text-white disabled:opacity-60"
+              >
+                {saving ? "Saving..." : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setForm(client ? formFromClient(client) : form);
+                  setIsEditing(false);
+                }}
+                disabled={saving}
+                className="rounded-lg border border-black/10 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              className="rounded-lg border border-black/10 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
+            >
+              Edit
+            </button>
+          )}
+          <Link href="/app/clients" className="rounded-lg border border-black/10 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50">
+            Back to clients
+          </Link>
+        </div>
       </div>
 
-      <dl className="grid gap-2 text-sm md:grid-cols-2">
-        {Object.entries(client)
-          .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-          .slice(0, 24)
-          .map(([key, value]) => (
-            <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
-              <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
+      {isEditing ? (
+        <div className="grid gap-2 text-sm md:grid-cols-2">
+          <label className="block text-xs text-zinc-600">
+            Status
+            <select
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.status}
+              onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+            >
+              {clientStatusOptions.map((status) => (
+                <option key={status} value={status}>
+                  {formatLabel(status)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Full name
+            <input
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.full_name}
+              onChange={(e) => setForm((prev) => ({ ...prev, full_name: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Partner's name (optional)
+            <input
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.partner_name}
+              onChange={(e) => setForm((prev) => ({ ...prev, partner_name: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Email
+            <input
+              type="email"
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.email}
+              onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Phone
+            <input
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.phone}
+              onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Partner's phone number (optional)
+            <input
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.partner_phone}
+              onChange={(e) => setForm((prev) => ({ ...prev, partner_phone: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Wedding date
+            <input
+              type="date"
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.wedding_date}
+              onChange={(e) => setForm((prev) => ({ ...prev, wedding_date: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600">
+            Venue
+            <input
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.venue}
+              onChange={(e) => setForm((prev) => ({ ...prev, venue: e.target.value }))}
+            />
+          </label>
+          <label className="block text-xs text-zinc-600 md:col-span-2">
+            Notes
+            <textarea
+              rows={4}
+              className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+              value={form.notes}
+              onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+            />
+          </label>
+        </div>
+      ) : (
+        <dl className="grid gap-2 text-sm md:grid-cols-2">
+          {Object.entries(client)
+            .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
+            .slice(0, 24)
+            .map(([key, value]) => {
+              const displayValue =
+                key === "notes" ? stripStructuredClientNotes(String(value)) : String(value);
+              if (!displayValue) return null;
+              return (
+                <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
+                  <dd className="mt-1 break-words text-zinc-800">{displayValue}</dd>
+                </div>
+              );
+            })}
+          {extractPartnerPhone(pickFirstText(client, ["notes"])) ? (
+            <div className="rounded-lg border border-black/10 px-3 py-2">
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>
+              <dd className="mt-1 break-words text-zinc-800">{extractPartnerPhone(pickFirstText(client, ["notes"]))}</dd>
             </div>
-          ))}
-        {extractPartnerPhone(pickFirstText(client, ["notes"])) ? (
-          <div className="rounded-lg border border-black/10 px-3 py-2">
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>
-            <dd className="mt-1 break-words text-zinc-800">{extractPartnerPhone(pickFirstText(client, ["notes"]))}</dd>
-          </div>
-        ) : null}
-        {extractHomeAddress(pickFirstText(client, ["notes"])) ? (
-          <div className="rounded-lg border border-black/10 px-3 py-2">
-            <dt className="text-xs uppercase tracking-wide text-zinc-500">Home address</dt>
-            <dd className="mt-1 break-words text-zinc-800">{extractHomeAddress(pickFirstText(client, ["notes"]))}</dd>
-          </div>
-        ) : null}
-      </dl>
+          ) : null}
+          {extractHomeAddress(pickFirstText(client, ["notes"])) ? (
+            <div className="rounded-lg border border-black/10 px-3 py-2">
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">Home address</dt>
+              <dd className="mt-1 break-words text-zinc-800">{extractHomeAddress(pickFirstText(client, ["notes"]))}</dd>
+            </div>
+          ) : null}
+        </dl>
+      )}
 
       <section className="rounded-xl border border-black/10 bg-white p-4">
         <h3 className="text-sm font-semibold text-zinc-900">Inspirations ({inspirationImages.length})</h3>

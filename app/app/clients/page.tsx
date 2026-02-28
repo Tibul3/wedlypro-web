@@ -91,6 +91,8 @@ function isTechnicalField(key: string): boolean {
   return (
     key === "id" ||
     key === "supplier_id" ||
+    key === "created_at" ||
+    key === "updated_at" ||
     key.endsWith("_id") ||
     key.endsWith("_token") ||
     key.startsWith("converted_from_")
@@ -135,6 +137,18 @@ function stripPartnerPhoneFromNotes(notes: string | null): string {
   return notes
     .split("\n")
     .filter((line) => !line.trim().toLowerCase().startsWith("partner phone:"))
+    .join("\n")
+    .trim();
+}
+
+function stripStructuredClientNotes(notes: string | null): string {
+  if (!notes) return "";
+  return notes
+    .split("\n")
+    .filter((line) => {
+      const normalized = line.trim().toLowerCase();
+      return !normalized.startsWith("partner phone:") && !normalized.startsWith("home address:");
+    })
     .join("\n")
     .trim();
 }
@@ -748,12 +762,17 @@ export default function ClientsPage() {
                 {Object.entries(selectedClient)
                   .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
                   .slice(0, 18)
-                  .map(([key, value]) => (
-                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
-                      <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-                    </div>
-                  ))}
+                  .map(([key, value]) => {
+                    const displayValue =
+                      key === "notes" ? stripStructuredClientNotes(String(value)) : String(value);
+                    if (!displayValue) return null;
+                    return (
+                      <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                        <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
+                        <dd className="mt-1 break-words text-zinc-800">{displayValue}</dd>
+                      </div>
+                    );
+                  })}
                 {extractPartnerPhone(pickFirstText(selectedClient, ["notes"])) ? (
                   <div className="rounded-lg border border-black/10 px-3 py-2">
                     <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>

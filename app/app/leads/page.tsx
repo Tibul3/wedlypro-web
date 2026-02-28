@@ -94,7 +94,7 @@ function leadDisplayName(lead: LeadRow): string {
 }
 
 function leadSubline(lead: LeadRow): string {
-  return pickFirstText(lead, ["email", "phone", "wedding_date", "source", "created_at"]) ?? "No extra details";
+  return pickFirstText(lead, ["email", "phone", "wedding_date", "source"]) ?? "No extra details";
 }
 
 function buildColumns(leads: LeadRow[]): LeadColumn[] {
@@ -124,7 +124,14 @@ function buildColumns(leads: LeadRow[]): LeadColumn[] {
 }
 
 function isTechnicalField(key: string): boolean {
-  return key === "id" || key === "supplier_id" || key.endsWith("_id") || key.endsWith("_token");
+  return (
+    key === "id" ||
+    key === "supplier_id" ||
+    key === "created_at" ||
+    key === "updated_at" ||
+    key.endsWith("_id") ||
+    key.endsWith("_token")
+  );
 }
 
 function formFromLead(lead: LeadRow): LeadForm {
