@@ -11,8 +11,9 @@ type ClientRow = {
 
 type ClientForm = {
   status: string;
-  name_1: string;
-  name_2: string;
+  full_name: string;
+  partner_name: string;
+  partner_phone: string;
   email: string;
   phone: string;
   wedding_date: string;
@@ -25,8 +26,9 @@ const statusOptions = ["active", "archived", "converted"];
 
 const emptyForm: ClientForm = {
   status: "active",
-  name_1: "",
-  name_2: "",
+  full_name: "",
+  partner_name: "",
+  partner_phone: "",
   email: "",
   phone: "",
   wedding_date: "",
@@ -93,16 +95,33 @@ function displaySubline(client: ClientRow): string {
   );
 }
 
+function extractPartnerPhone(notes: string | null): string {
+  if (!notes) return "";
+  const match = notes.match(/^Partner phone:\s*(.+)$/im);
+  return match?.[1]?.trim() ?? "";
+}
+
+function stripPartnerPhoneFromNotes(notes: string | null): string {
+  if (!notes) return "";
+  return notes
+    .split("\n")
+    .filter((line) => !line.trim().toLowerCase().startsWith("partner phone:"))
+    .join("\n")
+    .trim();
+}
+
 function formFromClient(client: ClientRow): ClientForm {
+  const rawNotes = pickFirstText(client, ["notes"]);
   return {
     status: pickFirstText(client, ["status"]) ?? "active",
-    name_1: pickFirstText(client, ["name_1", "name", "client_name"]) ?? "",
-    name_2: pickFirstText(client, ["name_2"]) ?? "",
+    full_name: pickFirstText(client, ["name_1", "name", "client_name"]) ?? "",
+    partner_name: pickFirstText(client, ["name_2"]) ?? "",
+    partner_phone: extractPartnerPhone(rawNotes),
     email: pickFirstText(client, ["email"]) ?? "",
     phone: pickFirstText(client, ["phone"]) ?? "",
     wedding_date: pickFirstText(client, ["wedding_date", "event_date"]) ?? "",
     venue: pickFirstText(client, ["venue"]) ?? "",
-    notes: pickFirstText(client, ["notes"]) ?? "",
+    notes: stripPartnerPhoneFromNotes(rawNotes),
   };
 }
 
@@ -224,7 +243,7 @@ export default function ClientsPage() {
       setError("Supplier profile missing.");
       return;
     }
-    if (!form.name_1.trim()) {
+    if (!form.full_name.trim()) {
       setError("Client name is required.");
       return;
     }
@@ -232,16 +251,20 @@ export default function ClientsPage() {
     setError(null);
     setSaving(true);
 
+    const notesParts: string[] = [];
+    if (form.notes.trim()) notesParts.push(form.notes.trim());
+    if (form.partner_phone.trim()) notesParts.push(`Partner phone: ${form.partner_phone.trim()}`);
+
     const payload = {
       supplier_id: supplierId,
       status: form.status.trim().toLowerCase() || "active",
-      name_1: form.name_1.trim(),
-      name_2: form.name_2.trim() || null,
+      name_1: form.full_name.trim(),
+      name_2: form.partner_name.trim() || null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       wedding_date: form.wedding_date || null,
       venue: form.venue.trim() || null,
-      notes: form.notes.trim() || null,
+      notes: notesParts.length > 0 ? notesParts.join("\n") : null,
     };
 
     if (editingClientId === "new") {
@@ -385,19 +408,19 @@ export default function ClientsPage() {
                 </select>
               </label>
               <label className="block text-xs text-zinc-600">
-                Name 1
+                Full name
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
-                  value={form.name_1}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name_1: e.target.value }))}
+                  value={form.full_name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, full_name: e.target.value }))}
                 />
               </label>
               <label className="block text-xs text-zinc-600">
-                Name 2
+                Partner's name (optional)
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
-                  value={form.name_2}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name_2: e.target.value }))}
+                  value={form.partner_name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, partner_name: e.target.value }))}
                 />
               </label>
               <label className="block text-xs text-zinc-600">
@@ -415,6 +438,14 @@ export default function ClientsPage() {
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
                   value={form.phone}
                   onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Partner's phone number (optional)
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.partner_phone}
+                  onChange={(e) => setForm((prev) => ({ ...prev, partner_phone: e.target.value }))}
                 />
               </label>
               <label className="block text-xs text-zinc-600">
