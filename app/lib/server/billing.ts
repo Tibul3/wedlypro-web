@@ -314,7 +314,8 @@ export async function syncWebStripeEntitlementForUser(params: {
     };
   }
 
-  const subscription = picked.subscription;
+  const subscription = await params.stripe.subscriptions.retrieve(picked.subscription.id);
+
   const activePrice = subscription.items.data[0]?.price?.id ?? null;
   const mappedPlan = getPlanForPrice(activePrice);
 
@@ -330,19 +331,30 @@ export async function syncWebStripeEntitlementForUser(params: {
     current_period_end?: number | null;
     trial_end?: number | null;
     cancel_at_period_end?: boolean | null;
+    currentPeriodEnd?: number | null;
+    trialEnd?: number | null;
+    cancelAtPeriodEnd?: boolean | null;
+    cancel_at?: number | null;
+    cancelAt?: number | null;
   };
+
+  const currentPeriodEnd = period.current_period_end ?? period.currentPeriodEnd ?? period.cancel_at ?? period.cancelAt ?? null;
+  const trialEnd = period.trial_end ?? period.trialEnd ?? null;
+  const cancelAtPeriodEnd =
+    period.cancel_at_period_end ?? period.cancelAtPeriodEnd ?? false;
+
   const now = Date.now();
-  const periodEndMs = (period.current_period_end ?? 0) * 1000;
+  const periodEndMs = (currentPeriodEnd ?? 0) * 1000;
 
   let mappedStatus = mapStripeStatus(subscription.status);
-  if ((subscription.status === "active" || subscription.status === "trialing") && period.cancel_at_period_end) {
+  if ((subscription.status === "active" || subscription.status === "trialing") && cancelAtPeriodEnd) {
     mappedStatus = "grace_period";
   } else if (subscription.status === "canceled" && periodEndMs > now) {
     mappedStatus = "active";
   }
 
-  const expiresAt = toIsoOrNull(period.current_period_end);
-  const trialEndsAt = toIsoOrNull(period.trial_end);
+  const expiresAt = toIsoOrNull(currentPeriodEnd);
+  const trialEndsAt = toIsoOrNull(trialEnd);
 
   const applyResult = await applyWebStripeEntitlement({
     userId: params.userId,
