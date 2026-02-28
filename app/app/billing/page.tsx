@@ -32,6 +32,23 @@ function tierLabel(tier: string | null, plan: string | null): string {
   return "Free";
 }
 
+function effectiveStatusLabel(supplier: SupplierBillingRow): string {
+  const source = supplier.entitlement_source ?? "manual";
+  const status = (supplier.subscription_status ?? "inactive").toLowerCase();
+
+  if (source !== "ios_iap" && source !== "web_stripe") {
+    return "Not subscribed";
+  }
+
+  if (status === "trialing") return "Trial active";
+  if (status === "active") return "Active";
+  if (status === "grace_period") return "Grace period";
+  if (status === "past_due") return "Past due";
+  if (status === "canceled") return "Canceled";
+  if (status === "expired") return "Expired";
+  return "Inactive";
+}
+
 export default function BillingPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -219,7 +236,7 @@ export default function BillingPage() {
           </div>
           <div className="rounded-lg border border-black/10 bg-white px-3 py-2 sm:col-span-2">
             <dt className="text-xs uppercase tracking-wide text-zinc-500">Subscription status</dt>
-            <dd className="mt-1 text-zinc-900">{supplier.subscription_status ?? "unknown"}</dd>
+            <dd className="mt-1 text-zinc-900">{effectiveStatusLabel(supplier)}</dd>
           </div>
         </dl>
       </section>
