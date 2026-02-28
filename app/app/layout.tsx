@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ensureSupplierProfile, getSupabaseBrowserClient } from "../lib/supabaseClient";
+import ProductUpdatesPrompt from "./components/ProductUpdatesPrompt";
 
 type NavItem = {
   href: string;
@@ -263,6 +264,7 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
         </header>
         <div className="p-5">{children}</div>
       </section>
+      {supabase ? <ProductUpdatesPrompt supplierId={supplier.id} supabase={supabase} /> : null}
     </div>
   );
 }
