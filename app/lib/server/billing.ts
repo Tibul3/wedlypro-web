@@ -34,6 +34,11 @@ export type BillingWebhookLogInput = {
   supplierUserId?: string | null;
 };
 
+type CandidateSubscription = {
+  subscription: Stripe.Subscription;
+  customerId: string;
+};
+
 export function getStripeClient(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return null;
@@ -125,6 +130,8 @@ export async function applyWebStripeEntitlement(params: {
   status: ApplyStatus;
   expiresAt: string | null;
   trialEndsAt: string | null;
+  stripeCustomerId?: string | null;
+  stripeSubscriptionId?: string | null;
 }) {
   const supabase = getSupabaseAdminClient();
   if (!supabase) return { ok: false, error: "SUPABASE_SERVICE_ROLE_KEY missing" };
@@ -144,17 +151,19 @@ export async function applyWebStripeEntitlement(params: {
     return { ok: false, error: "IOS_MANAGED_SUPPLIER", code: "IOS_MANAGED_SUPPLIER" as const };
   }
 
-  const { error: updateError } = await supabase
-    .from("suppliers")
-    .update({
-      entitlement_source: "web_stripe",
-      subscription_status: params.status,
-      tier,
-      plan,
-      entitlement_expires_at: params.expiresAt,
-      trial_ends_at: params.trialEndsAt,
-    })
-    .eq("user_id", params.userId);
+  const updatePayload: Record<string, unknown> = {
+    entitlement_source: "web_stripe",
+    subscription_status: params.status,
+    tier,
+    plan,
+    entitlement_expires_at: params.expiresAt,
+    trial_ends_at: params.trialEndsAt,
+  };
+
+  if (params.stripeCustomerId) updatePayload.stripe_customer_id = params.stripeCustomerId;
+  if (params.stripeSubscriptionId) updatePayload.stripe_subscription_id = params.stripeSubscriptionId;
+
+  const { error: updateError } = await supabase.from("suppliers").update(updatePayload).eq("user_id", params.userId);
 
   if (updateError) return { ok: false, error: updateError.message };
 
@@ -202,8 +211,8 @@ function mapStripeStatus(status: Stripe.Subscription.Status): ApplyStatus {
   return "inactive";
 }
 
-function pickBestSubscription(subscriptions: Stripe.Subscription[]): Stripe.Subscription | null {
-  if (subscriptions.length === 0) return null;
+function pickBestSubscription(candidates: CandidateSubscription[]): CandidateSubscription | null {
+  if (candidates.length === 0) return null;
 
   const priority: Record<string, number> = {
     active: 5,
@@ -216,14 +225,39 @@ function pickBestSubscription(subscriptions: Stripe.Subscription[]): Stripe.Subs
     paused: 0,
   };
 
-  return [...subscriptions].sort((a, b) => {
-    const pa = priority[a.status] ?? 0;
-    const pb = priority[b.status] ?? 0;
+  return [...candidates].sort((a, b) => {
+    const pa = priority[a.subscription.status] ?? 0;
+    const pb = priority[b.subscription.status] ?? 0;
     if (pa !== pb) return pb - pa;
-    const aCreated = typeof a.created === "number" ? a.created : 0;
-    const bCreated = typeof b.created === "number" ? b.created : 0;
+    const aCreated = typeof a.subscription.created === "number" ? a.subscription.created : 0;
+    const bCreated = typeof b.subscription.created === "number" ? b.subscription.created : 0;
     return bCreated - aCreated;
   })[0];
+}
+
+async function findCustomerIdsForUser(params: {
+  stripe: Stripe;
+  userId: string;
+  email?: string | null;
+}): Promise<string[]> {
+  const ids = new Set<string>();
+
+  try {
+    const matches = await params.stripe.customers.search({
+      query: `metadata['supabase_user_id']:'${params.userId}'`,
+      limit: 20,
+    });
+    for (const c of matches.data) ids.add(c.id);
+  } catch {
+    // Search API may be unavailable for some accounts/API versions; fallback below.
+  }
+
+  if (params.email) {
+    const customers = await params.stripe.customers.list({ email: params.email, limit: 20 });
+    for (const c of customers.data) ids.add(c.id);
+  }
+
+  return Array.from(ids);
 }
 
 export async function syncWebStripeEntitlementForUser(params: {
@@ -249,14 +283,13 @@ export async function syncWebStripeEntitlementForUser(params: {
     };
   }
 
-  let customerId: string | null = null;
-  if (params.email) {
-    const customers = await params.stripe.customers.list({ email: params.email, limit: 20 });
-    const exact = customers.data.find((c) => c.metadata?.supabase_user_id === params.userId);
-    customerId = exact?.id ?? customers.data[0]?.id ?? null;
-  }
+  const customerIds = await findCustomerIdsForUser({
+    stripe: params.stripe,
+    userId: params.userId,
+    email: params.email,
+  });
 
-  if (!customerId) {
+  if (customerIds.length === 0) {
     return {
       ok: false,
       code: "CUSTOMER_NOT_FOUND",
@@ -264,10 +297,16 @@ export async function syncWebStripeEntitlementForUser(params: {
     };
   }
 
-  const subscriptions = await params.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 20 });
-  const subscription = pickBestSubscription(subscriptions.data);
+  const candidates: CandidateSubscription[] = [];
+  for (const customerId of customerIds) {
+    const subs = await params.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 20 });
+    for (const sub of subs.data) {
+      candidates.push({ subscription: sub, customerId });
+    }
+  }
 
-  if (!subscription) {
+  const picked = pickBestSubscription(candidates);
+  if (!picked) {
     return {
       ok: false,
       code: "SUBSCRIPTION_NOT_FOUND",
@@ -275,6 +314,7 @@ export async function syncWebStripeEntitlementForUser(params: {
     };
   }
 
+  const subscription = picked.subscription;
   const activePrice = subscription.items.data[0]?.price?.id ?? null;
   const mappedPlan = getPlanForPrice(activePrice);
 
@@ -310,6 +350,8 @@ export async function syncWebStripeEntitlementForUser(params: {
     status: mappedStatus,
     expiresAt,
     trialEndsAt,
+    stripeCustomerId: picked.customerId,
+    stripeSubscriptionId: subscription.id,
   });
 
   if (!applyResult.ok) {
