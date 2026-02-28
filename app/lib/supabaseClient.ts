@@ -58,6 +58,25 @@ export async function ensureSupplierProfile(supabase: SupabaseClient, user: User
     return { ok: false, error: insertError.message };
   }
 
+  // Enforce paid-access onboarding defaults when billing columns exist in this Supabase project.
+  const { error: defaultsError } = await supabase
+    .from("suppliers")
+    .update({
+      billing_enforcement: "enforced",
+      entitlement_source: "manual",
+      subscription_status: "active",
+      tier: "essentials",
+      plan: "free",
+    })
+    .eq("user_id", user.id);
+
+  if (defaultsError) {
+    const missingColumn = /column .* does not exist/i.test(defaultsError.message);
+    if (!missingColumn) {
+      return { ok: false, error: defaultsError.message };
+    }
+  }
+
   return { ok: true };
 }
 
