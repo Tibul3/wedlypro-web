@@ -5,10 +5,34 @@ import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type ClientRow = {
   id: string;
+  supplier_id?: string | null;
   [key: string]: unknown;
 };
 
+type ClientForm = {
+  status: string;
+  name_1: string;
+  name_2: string;
+  email: string;
+  phone: string;
+  wedding_date: string;
+  venue: string;
+  notes: string;
+};
+
 const hiddenByDefaultStatuses = new Set(["archived", "converted"]);
+const statusOptions = ["active", "archived", "converted"];
+
+const emptyForm: ClientForm = {
+  status: "active",
+  name_1: "",
+  name_2: "",
+  email: "",
+  phone: "",
+  wedding_date: "",
+  venue: "",
+  notes: "",
+};
 
 function toText(value: unknown): string | null {
   if (value === null || value === undefined) return null;
@@ -69,47 +93,89 @@ function displaySubline(client: ClientRow): string {
   );
 }
 
+function formFromClient(client: ClientRow): ClientForm {
+  return {
+    status: pickFirstText(client, ["status"]) ?? "active",
+    name_1: pickFirstText(client, ["name_1", "name", "client_name"]) ?? "",
+    name_2: pickFirstText(client, ["name_2"]) ?? "",
+    email: pickFirstText(client, ["email"]) ?? "",
+    phone: pickFirstText(client, ["phone"]) ?? "",
+    wedding_date: pickFirstText(client, ["wedding_date", "event_date"]) ?? "",
+    venue: pickFirstText(client, ["venue"]) ?? "",
+    notes: pickFirstText(client, ["notes"]) ?? "",
+  };
+}
+
 export default function ClientsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
+  const [supplierId, setSupplierId] = useState<string | null>(null);
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [showArchivedConverted, setShowArchivedConverted] = useState(false);
 
+  const [editingClientId, setEditingClientId] = useState<string | null>(null);
+  const [form, setForm] = useState<ClientForm>(emptyForm);
+
+  const loadData = async () => {
+    if (!supabase) {
+      setError("Web app is not configured yet.");
+      setLoading(false);
+      return;
+    }
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session) {
+      setError("Please sign in again.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: supplier, error: supplierError } = await supabase
+      .from("suppliers")
+      .select("id")
+      .eq("user_id", session.user.id)
+      .maybeSingle<{ id: string }>();
+
+    if (supplierError || !supplier) {
+      setError("Supplier profile missing.");
+      setLoading(false);
+      return;
+    }
+
+    setSupplierId(supplier.id);
+
+    const { data, error: queryError } = await supabase
+      .from("clients")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (queryError) {
+      setError(queryError.message);
+      setLoading(false);
+      return;
+    }
+
+    const rows = (data ?? []) as ClientRow[];
+    setClients(rows);
+    setSelectedClientId((prev) => prev ?? rows[0]?.id ?? null);
+    setLoading(false);
+  };
+
   useEffect(() => {
     let mounted = true;
 
-    async function loadClients() {
-      if (!supabase) {
-        if (mounted) {
-          setError("Web app is not configured yet.");
-          setLoading(false);
-        }
-        return;
-      }
-
-      const { data, error: queryError } = await supabase
-        .from("clients")
-        .select("*")
-        .order("created_at", { ascending: false });
-
+    (async () => {
+      await loadData();
       if (!mounted) return;
-
-      if (queryError) {
-        setError(queryError.message);
-        setLoading(false);
-        return;
-      }
-
-      const rows = (data ?? []) as ClientRow[];
-      setClients(rows);
-      setSelectedClientId(rows.length > 0 ? rows[0].id : null);
-      setLoading(false);
-    }
-
-    void loadClients();
+    })();
 
     return () => {
       mounted = false;
@@ -136,6 +202,87 @@ export default function ClientsPage() {
     [visibleClients, selectedClientId],
   );
 
+  const startCreate = () => {
+    setEditingClientId("new");
+    setForm(emptyForm);
+  };
+
+  const startEdit = () => {
+    if (!selectedClient) return;
+    setEditingClientId(selectedClient.id);
+    setForm(formFromClient(selectedClient));
+  };
+
+  const cancelEdit = () => {
+    setEditingClientId(null);
+    setForm(emptyForm);
+  };
+
+  const saveClient = async () => {
+    if (!supabase) return;
+    if (!supplierId) {
+      setError("Supplier profile missing.");
+      return;
+    }
+    if (!form.name_1.trim()) {
+      setError("Client name is required.");
+      return;
+    }
+
+    setError(null);
+    setSaving(true);
+
+    const payload = {
+      supplier_id: supplierId,
+      status: form.status.trim().toLowerCase() || "active",
+      name_1: form.name_1.trim(),
+      name_2: form.name_2.trim() || null,
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      wedding_date: form.wedding_date || null,
+      venue: form.venue.trim() || null,
+      notes: form.notes.trim() || null,
+    };
+
+    if (editingClientId === "new") {
+      const { data, error: insertError } = await supabase
+        .from("clients")
+        .insert(payload)
+        .select("id")
+        .single<{ id: string }>();
+
+      if (insertError) {
+        setSaving(false);
+        setError(insertError.message);
+        return;
+      }
+
+      await loadData();
+      setSelectedClientId(data?.id ?? null);
+      setEditingClientId(null);
+      setSaving(false);
+      return;
+    }
+
+    if (editingClientId) {
+      const { error: updateError } = await supabase
+        .from("clients")
+        .update(payload)
+        .eq("id", editingClientId);
+
+      if (updateError) {
+        setSaving(false);
+        setError(updateError.message);
+        return;
+      }
+
+      await loadData();
+      setEditingClientId(null);
+    }
+
+    setSaving(false);
+  };
+
   if (loading) {
     return <p className="text-sm text-zinc-600">Loading clients...</p>;
   }
@@ -143,24 +290,35 @@ export default function ClientsPage() {
   if (error) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-        Failed to load clients: {error}
+        {error}
       </div>
     );
   }
 
+  const isEditing = editingClientId !== null;
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-zinc-600">Read-only client list synced from Supabase.</p>
-        <label className="inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700">
-          <input
-            type="checkbox"
-            className="h-4 w-4"
-            checked={showArchivedConverted}
-            onChange={(e) => setShowArchivedConverted(e.target.checked)}
-          />
-          Show archived/converted
-        </label>
+        <p className="text-sm text-zinc-600">Client list synced from Supabase. You can now create and edit clients.</p>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={startCreate}
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50"
+          >
+            New client
+          </button>
+          <label className="inline-flex items-center gap-2 rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={showArchivedConverted}
+              onChange={(e) => setShowArchivedConverted(e.target.checked)}
+            />
+            Show archived/converted
+          </label>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -197,11 +355,117 @@ export default function ClientsPage() {
         </section>
 
         <aside className="h-fit rounded-xl border border-black/10 bg-white p-4">
-          <h3 className="text-sm font-semibold text-zinc-900">Client details</h3>
-          {!selectedClient ? (
-            <p className="mt-3 text-sm text-zinc-600">Select a client to view details.</p>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-zinc-900">{isEditing ? "Edit client" : "Client details"}</h3>
+            {!isEditing && selectedClient ? (
+              <button
+                type="button"
+                onClick={startEdit}
+                className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+              >
+                Edit
+              </button>
+            ) : null}
+          </div>
+
+          {isEditing ? (
+            <div className="space-y-2 text-sm">
+              <label className="block text-xs text-zinc-600">
+                Status
+                <select
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.status}
+                  onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+                >
+                  {statusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {formatLabel(status)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Name 1
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.name_1}
+                  onChange={(e) => setForm((prev) => ({ ...prev, name_1: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Name 2
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.name_2}
+                  onChange={(e) => setForm((prev) => ({ ...prev, name_2: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Email
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Phone
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.phone}
+                  onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Wedding date
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  type="date"
+                  value={form.wedding_date}
+                  onChange={(e) => setForm((prev) => ({ ...prev, wedding_date: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Venue
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.venue}
+                  onChange={(e) => setForm((prev) => ({ ...prev, venue: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Notes
+                <textarea
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  rows={3}
+                  value={form.notes}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                />
+              </label>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={saveClient}
+                  disabled={saving}
+                  className="rounded-lg bg-zinc-900 px-3 py-2 text-xs text-white disabled:opacity-60"
+                >
+                  {saving ? "Saving..." : "Save client"}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="rounded-lg border border-black/10 px-3 py-2 text-xs text-zinc-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : !selectedClient ? (
+            <p className="text-sm text-zinc-600">Select a client to view details.</p>
           ) : (
-            <dl className="mt-3 space-y-2 text-sm">
+            <dl className="space-y-2 text-sm">
               {Object.entries(selectedClient)
                 .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
                 .slice(0, 18)
