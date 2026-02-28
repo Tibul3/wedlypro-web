@@ -59,7 +59,7 @@ function effectiveStatusLabel(supplier: SupplierBillingRow): string {
 
   if (status === "trialing") return "Trial active";
   if (status === "active") return "Active";
-  if (status === "grace_period") return "Grace period";
+  if (status === "grace_period") return "Cancellation pending";
   if (status === "past_due") return "Past due";
   if (status === "canceled") return "Canceled";
   if (status === "expired") return "Expired";
@@ -81,7 +81,7 @@ function renewalSummary(supplier: SupplierBillingRow): string {
   }
 
   if (supplier.entitlement_expires_at) {
-    if (status === "canceled") {
+    if (status === "canceled" || status === "grace_period") {
       return `Cancellation recorded. Access remains until ${formatDate(supplier.entitlement_expires_at)}.`;
     }
     return `Current access period ends on ${formatDate(supplier.entitlement_expires_at)} (renews unless cancelled).`;
