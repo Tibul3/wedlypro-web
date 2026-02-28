@@ -34,6 +34,12 @@ function formatLabel(key: string): string {
     .join(" ");
 }
 
+function clientFieldLabel(key: string): string {
+  if (key === "name_1" || key === "name") return "Full name";
+  if (key === "name_2") return "Partner's name";
+  return formatLabel(key);
+}
+
 function isTechnicalField(key: string): boolean {
   return (
     key === "id" ||
@@ -42,6 +48,71 @@ function isTechnicalField(key: string): boolean {
     key.endsWith("_token") ||
     key.startsWith("converted_from_")
   );
+}
+
+function extractPartnerPhone(notes: string | null): string {
+  if (!notes) return "";
+  const match = notes.match(/^Partner phone:\s*(.+)$/im);
+  return match?.[1]?.trim() ?? "";
+}
+
+function extractHomeAddress(notes: string | null): string {
+  if (!notes) return "";
+  const match = notes.match(/^Home address:\s*(.+)$/im);
+  return match?.[1]?.trim() ?? "";
+}
+
+function toText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number") return String(value);
+  return null;
+}
+
+function pickFirstText(record: ClientRow, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = toText(record[key]);
+    if (value) return value;
+  }
+  return null;
+}
+
+async function resolveInspirationPreviewUrl(
+  supabase: NonNullable<ReturnType<typeof getSupabaseBrowserClient>>,
+  supplierId: string,
+  clientId: string,
+  storagePath: string,
+  fileName: string | null,
+): Promise<string | null> {
+  if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) return storagePath;
+
+  const normalized = storagePath.trim();
+  const candidates = [
+    normalized,
+    normalized.startsWith("/") ? normalized.slice(1) : normalized,
+    normalized.replace(/^inspiration\//, ""),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const { data, error } = await supabase.storage.from(INSPIRATION_BUCKET).createSignedUrl(candidate, 3600);
+    if (!error && data?.signedUrl) return data.signedUrl;
+  }
+
+  if (fileName) {
+    const { data: listed, error: listError } = await supabase.storage
+      .from(INSPIRATION_BUCKET)
+      .list(`${supplierId}/${clientId}`, { limit: 200, sortBy: { column: "name", order: "asc" } });
+    if (!listError && listed) {
+      const matched = listed.find((item) => item.name.toLowerCase() === fileName.toLowerCase());
+      if (matched) {
+        const fallbackPath = `${supplierId}/${clientId}/${matched.name}`;
+        const { data, error } = await supabase.storage.from(INSPIRATION_BUCKET).createSignedUrl(fallbackPath, 3600);
+        if (!error && data?.signedUrl) return data.signedUrl;
+      }
+    }
+  }
+
+  return null;
 }
 
 export default function ClientDetailPage() {
@@ -92,16 +163,16 @@ export default function ClientDetailPage() {
 
     const hydrated = await Promise.all(
       rows.map(async (row) => {
-        if (row.storage_path.startsWith("http://") || row.storage_path.startsWith("https://")) {
-          return { ...row, preview_url: row.storage_path };
-        }
-        const normalizedPath = row.storage_path.startsWith("/") ? row.storage_path.slice(1) : row.storage_path;
-        const { data: signed, error: signedError } = await supabase.storage
-          .from(INSPIRATION_BUCKET)
-          .createSignedUrl(normalizedPath, 3600);
+        const previewUrl = await resolveInspirationPreviewUrl(
+          supabase,
+          nextSupplierId,
+          nextClientId,
+          row.storage_path,
+          row.file_name,
+        );
         return {
           ...row,
-          preview_url: signedError ? null : signed.signedUrl,
+          preview_url: previewUrl,
         };
       }),
     );
@@ -171,22 +242,23 @@ export default function ClientDetailPage() {
     if (!supabase) return;
     const image = inspirationImages.find((item) => item.id === imageId);
     if (!image) return;
-    if (image.storage_path.startsWith("http://") || image.storage_path.startsWith("https://")) return;
-
     setRefreshingImageId(imageId);
-    const normalizedPath = image.storage_path.startsWith("/") ? image.storage_path.slice(1) : image.storage_path;
-    const { data: signed, error: signedError } = await supabase.storage
-      .from(INSPIRATION_BUCKET)
-      .createSignedUrl(normalizedPath, 3600);
+    const previewUrl = await resolveInspirationPreviewUrl(
+      supabase,
+      supplierId ?? "",
+      clientId ?? "",
+      image.storage_path,
+      image.file_name,
+    );
     setRefreshingImageId(null);
 
-    if (signedError || !signed?.signedUrl) {
+    if (!previewUrl) {
       setInspirationError("Unable to refresh this image preview.");
       return;
     }
 
     setInspirationImages((prev) =>
-      prev.map((item) => (item.id === imageId ? { ...item, preview_url: signed.signedUrl } : item)),
+      prev.map((item) => (item.id === imageId ? { ...item, preview_url: previewUrl } : item)),
     );
   };
 
@@ -295,10 +367,22 @@ export default function ClientDetailPage() {
           .slice(0, 24)
           .map(([key, value]) => (
             <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
               <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
             </div>
           ))}
+        {extractPartnerPhone(pickFirstText(client, ["notes"])) ? (
+          <div className="rounded-lg border border-black/10 px-3 py-2">
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>
+            <dd className="mt-1 break-words text-zinc-800">{extractPartnerPhone(pickFirstText(client, ["notes"]))}</dd>
+          </div>
+        ) : null}
+        {extractHomeAddress(pickFirstText(client, ["notes"])) ? (
+          <div className="rounded-lg border border-black/10 px-3 py-2">
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">Home address</dt>
+            <dd className="mt-1 break-words text-zinc-800">{extractHomeAddress(pickFirstText(client, ["notes"]))}</dd>
+          </div>
+        ) : null}
       </dl>
 
       <section className="rounded-xl border border-black/10 bg-white p-4">
@@ -396,4 +480,3 @@ export default function ClientDetailPage() {
     </div>
   );
 }
-

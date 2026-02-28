@@ -80,6 +80,12 @@ function statusTitle(statusKey: string): string {
     .join(" ");
 }
 
+function leadFieldLabel(key: string): string {
+  if (key === "name_1" || key === "name") return "Full name";
+  if (key === "name_2") return "Partner's name";
+  return statusTitle(key);
+}
+
 function leadDisplayName(lead: LeadRow): string {
   const primary = pickFirstText(lead, ["name_1", "name", "lead_name", "display_name", "email"]);
   const secondary = pickFirstText(lead, ["name_2"]);
@@ -511,7 +517,7 @@ export default function LeadsPage() {
                 .slice(0, 18)
                 .map(([key, value]) => (
                   <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{statusTitle(key)}</dt>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{leadFieldLabel(key)}</dt>
                     <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
                   </div>
                 ))}
