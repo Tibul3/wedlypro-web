@@ -17,8 +17,7 @@ type LeadColumn = {
 
 type LeadForm = {
   status: string;
-  name_1: string;
-  name_2: string;
+  full_name: string;
   email: string;
   phone: string;
   wedding_date: string;
@@ -43,8 +42,7 @@ const statusOptions = [
 
 const emptyForm: LeadForm = {
   status: "New",
-  name_1: "",
-  name_2: "",
+  full_name: "",
   email: "",
   phone: "",
   wedding_date: "",
@@ -126,8 +124,7 @@ function isTechnicalField(key: string): boolean {
 function formFromLead(lead: LeadRow): LeadForm {
   return {
     status: pickFirstText(lead, ["status"]) ?? "New",
-    name_1: pickFirstText(lead, ["name_1", "name"]) ?? "",
-    name_2: pickFirstText(lead, ["name_2"]) ?? "",
+    full_name: pickFirstText(lead, ["name_1", "name"]) ?? "",
     email: pickFirstText(lead, ["email"]) ?? "",
     phone: pickFirstText(lead, ["phone"]) ?? "",
     wedding_date: pickFirstText(lead, ["wedding_date"]) ?? "",
@@ -258,7 +255,7 @@ export default function LeadsPage() {
       return;
     }
 
-    if (!form.name_1.trim()) {
+    if (!form.full_name.trim()) {
       setError("Lead name is required.");
       return;
     }
@@ -269,8 +266,8 @@ export default function LeadsPage() {
     const payload = {
       supplier_id: supplierId,
       status: form.status.trim() || "New",
-      name_1: form.name_1.trim(),
-      name_2: form.name_2.trim() || null,
+      name_1: form.full_name.trim(),
+      name_2: null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       wedding_date: form.wedding_date || null,
@@ -428,19 +425,11 @@ export default function LeadsPage() {
                 </select>
               </label>
               <label className="block text-xs text-zinc-600">
-                Name 1
+                Full name
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
-                  value={form.name_1}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name_1: e.target.value }))}
-                />
-              </label>
-              <label className="block text-xs text-zinc-600">
-                Name 2
-                <input
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
-                  value={form.name_2}
-                  onChange={(e) => setForm((prev) => ({ ...prev, name_2: e.target.value }))}
+                  value={form.full_name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, full_name: e.target.value }))}
                 />
               </label>
               <label className="block text-xs text-zinc-600">
