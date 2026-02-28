@@ -9,6 +9,8 @@ type SupplierBillingRow = {
   tier: string | null;
   plan: string | null;
   subscription_status: string | null;
+  entitlement_expires_at: string | null;
+  trial_ends_at: string | null;
 };
 
 type BillingActionPayload = {
@@ -17,6 +19,14 @@ type BillingActionPayload = {
   url?: string;
   error?: string;
   code?: string;
+};
+
+type BillingEvent = {
+  event_id: string;
+  event_type: string;
+  delivery_status: string;
+  error_message: string | null;
+  created_at: string;
 };
 
 function sourceLabel(source: string | null): string {
@@ -30,6 +40,13 @@ function tierLabel(tier: string | null, plan: string | null): string {
   if (tier === "professional" || plan === "pro") return "Professional";
   if (tier === "essentials") return "Essentials";
   return "Free";
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleString();
 }
 
 function effectiveStatusLabel(supplier: SupplierBillingRow): string {
@@ -49,6 +66,30 @@ function effectiveStatusLabel(supplier: SupplierBillingRow): string {
   return "Inactive";
 }
 
+function renewalSummary(supplier: SupplierBillingRow): string {
+  const source = supplier.entitlement_source ?? "manual";
+  const status = (supplier.subscription_status ?? "inactive").toLowerCase();
+
+  if (source === "manual") {
+    return "No web subscription is active on this account.";
+  }
+
+  if (status === "trialing") {
+    return supplier.trial_ends_at
+      ? `Trial ends on ${formatDate(supplier.trial_ends_at)}. Paid billing starts after trial unless cancelled in Stripe.`
+      : "Trial is active.";
+  }
+
+  if (supplier.entitlement_expires_at) {
+    if (status === "canceled") {
+      return `Cancellation recorded. Access remains until ${formatDate(supplier.entitlement_expires_at)}.`;
+    }
+    return `Current access period ends on ${formatDate(supplier.entitlement_expires_at)} (renews unless cancelled).`;
+  }
+
+  return "Subscription is active.";
+}
+
 export default function BillingPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -57,6 +98,8 @@ export default function BillingPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [runningAction, setRunningAction] = useState<"essentials" | "professional" | "portal" | null>(null);
+  const [events, setEvents] = useState<BillingEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -84,7 +127,7 @@ export default function BillingPage() {
 
       const { data, error: supplierError } = await supabase
         .from("suppliers")
-        .select("id,entitlement_source,tier,plan,subscription_status")
+        .select("id,entitlement_source,tier,plan,subscription_status,entitlement_expires_at,trial_ends_at")
         .eq("user_id", session.user.id)
         .maybeSingle<SupplierBillingRow>();
 
@@ -99,6 +142,21 @@ export default function BillingPage() {
       setSupplier(data ?? null);
       if (!data) setError("Supplier profile not found.");
       setLoading(false);
+
+      setEventsLoading(true);
+      const eventsResponse = await fetch("/api/billing/events?limit=8", {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+      const eventsPayload = (await eventsResponse.json()) as {
+        events?: BillingEvent[];
+      };
+
+      if (mounted && eventsResponse.ok) {
+        setEvents(eventsPayload.events ?? []);
+      }
+      if (mounted) setEventsLoading(false);
     }
 
     void loadSupplier();
@@ -218,6 +276,7 @@ export default function BillingPage() {
   const source = supplier.entitlement_source;
   const isAppleManaged = source === "ios_iap";
   const isWebStripe = source === "web_stripe";
+  const isProfessional = supplier.tier === "professional" || supplier.plan === "pro";
 
   return (
     <div className="space-y-4">
@@ -238,6 +297,10 @@ export default function BillingPage() {
             <dt className="text-xs uppercase tracking-wide text-zinc-500">Subscription status</dt>
             <dd className="mt-1 text-zinc-900">{effectiveStatusLabel(supplier)}</dd>
           </div>
+          <div className="rounded-lg border border-black/10 bg-white px-3 py-2 sm:col-span-2">
+            <dt className="text-xs uppercase tracking-wide text-zinc-500">Renewal / cancellation</dt>
+            <dd className="mt-1 text-zinc-900">{renewalSummary(supplier)}</dd>
+          </div>
         </dl>
       </section>
 
@@ -250,22 +313,28 @@ export default function BillingPage() {
           </p>
         ) : (
           <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => runBillingAction("checkout", "essentials")}
-              disabled={runningAction !== null}
-              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {runningAction === "essentials" ? "Please wait..." : "Start Essentials (Web)"}
-            </button>
-            <button
-              type="button"
-              onClick={() => runBillingAction("checkout", "professional")}
-              disabled={runningAction !== null}
-              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {runningAction === "professional" ? "Please wait..." : "Start Professional (Web)"}
-            </button>
+            {!isWebStripe ? (
+              <button
+                type="button"
+                onClick={() => runBillingAction("checkout", "essentials")}
+                disabled={runningAction !== null}
+                className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningAction === "essentials" ? "Please wait..." : "Start Essentials (Web)"}
+              </button>
+            ) : null}
+
+            {!isProfessional ? (
+              <button
+                type="button"
+                onClick={() => runBillingAction("checkout", "professional")}
+                disabled={runningAction !== null}
+                className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningAction === "professional" ? "Please wait..." : "Upgrade to Professional"}
+              </button>
+            ) : null}
+
             {isWebStripe ? (
               <button
                 type="button"
@@ -276,6 +345,7 @@ export default function BillingPage() {
                 {runningAction === "portal" ? "Please wait..." : "Manage Stripe billing"}
               </button>
             ) : null}
+
             <button
               type="button"
               onClick={runManualSync}
@@ -290,6 +360,28 @@ export default function BillingPage() {
         {actionMessage ? (
           <p className="mt-3 rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">{actionMessage}</p>
         ) : null}
+      </section>
+
+      <section className="rounded-xl border border-black/10 bg-white p-4">
+        <h3 className="text-sm font-semibold text-zinc-900">Billing diagnostics</h3>
+        <p className="mt-1 text-xs text-zinc-500">Recent Stripe webhook events linked to this account.</p>
+
+        {eventsLoading ? (
+          <p className="mt-3 text-sm text-zinc-600">Loading events...</p>
+        ) : events.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-600">No webhook events recorded for this user yet.</p>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {events.map((event) => (
+              <div key={event.event_id} className="rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-xs">
+                <p className="font-medium text-zinc-800">{event.event_type}</p>
+                <p className="mt-1 text-zinc-600">Status: {event.delivery_status}</p>
+                <p className="text-zinc-600">At: {formatDate(event.created_at)}</p>
+                {event.error_message ? <p className="mt-1 text-red-700">{event.error_message}</p> : null}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

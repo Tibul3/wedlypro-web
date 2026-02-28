@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import {
   getStripeClient,
+  hasProcessedBillingWebhookEvent,
   logBillingWebhookEvent,
   syncWebStripeEntitlementForUser,
 } from "../../../lib/server/billing";
@@ -47,6 +48,18 @@ export async function POST(request: Request) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Signature verification failed";
     return NextResponse.json({ error: message }, { status: 400 });
+  }
+
+  const alreadyProcessed = await hasProcessedBillingWebhookEvent(event.id);
+  if (alreadyProcessed) {
+    await logBillingWebhookEvent({
+      eventId: event.id,
+      eventType: event.type,
+      deliveryStatus: "ignored",
+      errorMessage: "Duplicate Stripe delivery ignored (already processed).",
+      payload: { duplicate: true },
+    });
+    return NextResponse.json({ received: true, duplicate: true });
   }
 
   await logBillingWebhookEvent({
