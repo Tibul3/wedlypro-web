@@ -84,7 +84,7 @@ function renewalSummary(supplier: SupplierBillingRow): string {
     if (status === "canceled" || status === "grace_period") {
       return `Cancellation recorded. Access remains until ${formatDate(supplier.entitlement_expires_at)}.`;
     }
-    return `Current access period ends on ${formatDate(supplier.entitlement_expires_at)} (renews unless cancelled).`;
+    return `Current access period ends on ${formatDate(supplier.entitlement_expires_at)}.`;
   }
 
   return "Subscription is active.";
