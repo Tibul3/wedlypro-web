@@ -91,6 +91,49 @@ export default function BillingPage() {
     };
   }, [supabase]);
 
+  const runManualSync = async () => {
+    if (!supabase) return;
+
+    setActionMessage(null);
+    setRunningAction("portal");
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      setRunningAction(null);
+      setActionMessage("Session expired. Please sign in again.");
+      return;
+    }
+
+    const response = await fetch("/api/billing/sync", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+    });
+
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      code?: string;
+      error?: string;
+      status?: string;
+      plan?: string;
+    };
+
+    if (!response.ok) {
+      setRunningAction(null);
+      setActionMessage(payload.error ?? "Manual sync failed.");
+      return;
+    }
+
+    setRunningAction(null);
+    setActionMessage(`Billing sync complete (${payload.plan ?? "unknown"}, ${payload.status ?? "unknown"}). Refreshing...`);
+    window.location.reload();
+  };
+
   const runBillingAction = async (action: "checkout" | "portal", plan?: "essentials" | "professional") => {
     if (!supabase) return;
 
@@ -216,6 +259,14 @@ export default function BillingPage() {
                 {runningAction === "portal" ? "Please wait..." : "Manage Stripe billing"}
               </button>
             ) : null}
+            <button
+              type="button"
+              onClick={runManualSync}
+              disabled={runningAction !== null}
+              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {runningAction === "portal" ? "Please wait..." : "Sync billing status"}
+            </button>
           </div>
         )}
 

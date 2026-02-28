@@ -13,6 +13,27 @@ export type SupplierBillingRow = {
   subscription_status: string | null;
 };
 
+type ApplyStatus = "active" | "trialing" | "past_due" | "canceled" | "inactive";
+
+type SyncResult = {
+  ok: boolean;
+  code: string;
+  message: string;
+  plan?: PlanTier;
+  status?: ApplyStatus;
+  expiresAt?: string | null;
+  trialEndsAt?: string | null;
+};
+
+export type BillingWebhookLogInput = {
+  eventId: string;
+  eventType: string;
+  deliveryStatus: "received" | "processed" | "ignored" | "error";
+  errorMessage?: string | null;
+  payload?: unknown;
+  supplierUserId?: string | null;
+};
+
 export function getStripeClient(): Stripe | null {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) return null;
@@ -79,7 +100,7 @@ export async function findSupplierByEmail(email: string) {
 export async function applyWebStripeEntitlement(params: {
   userId: string;
   plan: PlanTier;
-  status: "active" | "trialing" | "past_due" | "canceled" | "inactive";
+  status: ApplyStatus;
   expiresAt: string | null;
   trialEndsAt: string | null;
 }) {
@@ -116,4 +137,162 @@ export async function applyWebStripeEntitlement(params: {
   if (updateError) return { ok: false, error: updateError.message };
 
   return { ok: true };
+}
+
+export async function logBillingWebhookEvent(input: BillingWebhookLogInput): Promise<void> {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return;
+
+  const { error } = await supabase.from("billing_webhook_events").insert({
+    event_id: input.eventId,
+    event_type: input.eventType,
+    provider: "stripe",
+    delivery_status: input.deliveryStatus,
+    error_message: input.errorMessage ?? null,
+    payload: input.payload ?? null,
+    supplier_user_id: input.supplierUserId ?? null,
+  });
+
+  if (error) {
+    const missingTable = /relation .*billing_webhook_events.* does not exist/i.test(error.message);
+    if (!missingTable) {
+      console.warn("billing_webhook_events insert failed", error.message);
+    }
+  }
+}
+
+function toIsoOrNull(unixSeconds?: number | null): string | null {
+  if (!unixSeconds || !Number.isFinite(unixSeconds)) return null;
+  return new Date(unixSeconds * 1000).toISOString();
+}
+
+function mapStripeStatus(status: Stripe.Subscription.Status): ApplyStatus {
+  if (status === "active") return "active";
+  if (status === "trialing") return "trialing";
+  if (status === "past_due") return "past_due";
+  if (status === "canceled") return "canceled";
+  return "inactive";
+}
+
+function pickBestSubscription(subscriptions: Stripe.Subscription[]): Stripe.Subscription | null {
+  if (subscriptions.length === 0) return null;
+
+  const priority: Record<string, number> = {
+    active: 5,
+    trialing: 4,
+    past_due: 3,
+    unpaid: 2,
+    canceled: 1,
+    incomplete: 0,
+    incomplete_expired: 0,
+    paused: 0,
+  };
+
+  return [...subscriptions].sort((a, b) => {
+    const pa = priority[a.status] ?? 0;
+    const pb = priority[b.status] ?? 0;
+    if (pa !== pb) return pb - pa;
+    const aCreated = typeof a.created === "number" ? a.created : 0;
+    const bCreated = typeof b.created === "number" ? b.created : 0;
+    return bCreated - aCreated;
+  })[0];
+}
+
+export async function syncWebStripeEntitlementForUser(params: {
+  stripe: Stripe;
+  userId: string;
+  email?: string | null;
+}): Promise<SyncResult> {
+  const supplierResult = await findSupplierByUserId(params.userId);
+  if (supplierResult.error) {
+    return { ok: false, code: "SUPPLIER_LOOKUP_FAILED", message: supplierResult.error };
+  }
+
+  const supplier = supplierResult.supplier;
+  if (!supplier) {
+    return { ok: false, code: "SUPPLIER_NOT_FOUND", message: "Supplier not found." };
+  }
+
+  if (supplier.entitlement_source === "ios_iap") {
+    return {
+      ok: false,
+      code: "IOS_MANAGED_SUPPLIER",
+      message: "Supplier is managed by Apple subscriptions.",
+    };
+  }
+
+  let customerId: string | null = null;
+  if (params.email) {
+    const customers = await params.stripe.customers.list({ email: params.email, limit: 20 });
+    const exact = customers.data.find((c) => c.metadata?.supabase_user_id === params.userId);
+    customerId = exact?.id ?? customers.data[0]?.id ?? null;
+  }
+
+  if (!customerId) {
+    return {
+      ok: false,
+      code: "CUSTOMER_NOT_FOUND",
+      message: "No Stripe customer found for this account.",
+    };
+  }
+
+  const subscriptions = await params.stripe.subscriptions.list({ customer: customerId, status: "all", limit: 20 });
+  const subscription = pickBestSubscription(subscriptions.data);
+
+  if (!subscription) {
+    return {
+      ok: false,
+      code: "SUBSCRIPTION_NOT_FOUND",
+      message: "No Stripe subscriptions found for this customer.",
+    };
+  }
+
+  const activePrice = subscription.items.data[0]?.price?.id ?? null;
+  const mappedPlan = getPlanForPrice(activePrice);
+
+  if (!mappedPlan) {
+    return {
+      ok: false,
+      code: "UNKNOWN_PRICE",
+      message: `Unknown Stripe price id: ${activePrice ?? "none"}`,
+    };
+  }
+
+  const period = subscription as unknown as { current_period_end?: number | null; trial_end?: number | null };
+  const now = Date.now();
+  const periodEndMs = (period.current_period_end ?? 0) * 1000;
+
+  let mappedStatus = mapStripeStatus(subscription.status);
+  if (subscription.status === "canceled" && periodEndMs > now) {
+    mappedStatus = "active";
+  }
+
+  const expiresAt = toIsoOrNull(period.current_period_end);
+  const trialEndsAt = toIsoOrNull(period.trial_end);
+
+  const applyResult = await applyWebStripeEntitlement({
+    userId: params.userId,
+    plan: mappedPlan,
+    status: mappedStatus,
+    expiresAt,
+    trialEndsAt,
+  });
+
+  if (!applyResult.ok) {
+    return {
+      ok: false,
+      code: applyResult.code ?? "ENTITLEMENT_UPDATE_FAILED",
+      message: applyResult.error ?? "Failed to apply entitlement update.",
+    };
+  }
+
+  return {
+    ok: true,
+    code: "SYNC_APPLIED",
+    message: "Entitlement synced from Stripe.",
+    plan: mappedPlan,
+    status: mappedStatus,
+    expiresAt,
+    trialEndsAt,
+  };
 }
