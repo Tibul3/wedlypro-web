@@ -13,7 +13,7 @@ export type SupplierBillingRow = {
   subscription_status: string | null;
 };
 
-type ApplyStatus = "active" | "trialing" | "past_due" | "canceled" | "inactive";
+type ApplyStatus = "active" | "trialing" | "grace_period" | "past_due" | "canceled" | "inactive";
 
 type SyncResult = {
   ok: boolean;
@@ -286,12 +286,18 @@ export async function syncWebStripeEntitlementForUser(params: {
     };
   }
 
-  const period = subscription as unknown as { current_period_end?: number | null; trial_end?: number | null };
+  const period = subscription as unknown as {
+    current_period_end?: number | null;
+    trial_end?: number | null;
+    cancel_at_period_end?: boolean | null;
+  };
   const now = Date.now();
   const periodEndMs = (period.current_period_end ?? 0) * 1000;
 
   let mappedStatus = mapStripeStatus(subscription.status);
-  if (subscription.status === "canceled" && periodEndMs > now) {
+  if ((subscription.status === "active" || subscription.status === "trialing") && period.cancel_at_period_end) {
+    mappedStatus = "grace_period";
+  } else if (subscription.status === "canceled" && periodEndMs > now) {
     mappedStatus = "active";
   }
 
