@@ -72,6 +72,12 @@ type DocumentRow = {
   created_at: string;
 };
 
+type SignatureRow = {
+  signer_name: string;
+  signed_at: string;
+  signature_image_path: string | null;
+};
+
 type LineItemInput = {
   id: string;
   description: string;
@@ -95,6 +101,7 @@ const documentStatuses: DocumentStatus[] = ["draft", "sent", "paid", "signed"];
 const contractsUpgradeMessage = "Contracts are available on Professional. Upgrade in Billing to create contracts.";
 const copyrightNotice = "© 2026 Wedly Pro. All rights reserved.";
 const supplierLogoBucket = "supplier-logos";
+const signatureBucket = "signatures";
 
 const blankContractDetails: ContractDetails = {
   servicesIncluded: "",
@@ -1030,6 +1037,32 @@ export default function DocumentsPage() {
     const supplierName = supplier.business_name?.trim() || "Wedly Pro Supplier";
     const canUseBranding = isProfessionalSupplier(supplier);
     const paymentDetails = document.type === "invoice" ? await getSupplierInvoicePaymentDetails() : null;
+    let contractSignature: SignatureRow | null = null;
+    let signatureDataUrl: string | null = null;
+
+    if (document.type === "contract" && document.status === "signed") {
+      const { data: signatureData, error: signatureError } = await supabase
+        .from("signatures")
+        .select("signer_name,signed_at,signature_image_path")
+        .eq("document_id", document.id)
+        .eq("supplier_id", supplier.id)
+        .maybeSingle<SignatureRow>();
+
+      if (signatureError) {
+        throw new Error(signatureError.message);
+      }
+
+      contractSignature = signatureData ?? null;
+
+      if (contractSignature?.signature_image_path?.trim()) {
+        const { data: signedSignatureUrl } = await supabase.storage
+          .from(signatureBucket)
+          .createSignedUrl(contractSignature.signature_image_path.trim(), 60 * 30);
+        if (signedSignatureUrl?.signedUrl) {
+          signatureDataUrl = await toDataUrlFromSignedUrl(signedSignatureUrl.signedUrl);
+        }
+      }
+    }
 
     const pdf = new jsPDF({ unit: "pt", format: "a4" });
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -1254,6 +1287,38 @@ export default function DocumentsPage() {
       drawField("Payment Schedule", details.paymentSchedule || "Not specified", true);
       drawField("Timeline", details.timeline || "Not specified", true);
       drawField("Special Terms", details.specialTerms || "Not specified", true);
+
+      if (document.status === "signed") {
+        drawRule();
+        drawSectionHeading("Client Signature");
+        drawField("Signer Name", contractSignature?.signer_name || "Not available");
+        drawField("Signed At", contractSignature?.signed_at ? formatDateTime(contractSignature.signed_at) : "Not available");
+
+        if (signatureDataUrl) {
+          const signatureFormat = imageFormatFromDataUrl(signatureDataUrl);
+          if (signatureFormat) {
+            ensureSpace(72);
+            const signBoxWidth = 220;
+            const signBoxHeight = 58;
+            pdf.setFillColor(255, 255, 255);
+            pdf.setDrawColor(228, 228, 231);
+            pdf.roundedRect(margin, y, signBoxWidth, signBoxHeight, 4, 4, "FD");
+
+            const signatureProps = pdf.getImageProperties(signatureDataUrl);
+            const sourceWidth = Number(signatureProps.width || 1);
+            const sourceHeight = Number(signatureProps.height || 1);
+            const innerWidth = signBoxWidth - 12;
+            const innerHeight = signBoxHeight - 12;
+            const ratio = Math.min(innerWidth / sourceWidth, innerHeight / sourceHeight);
+            const renderWidth = Math.max(8, sourceWidth * ratio);
+            const renderHeight = Math.max(8, sourceHeight * ratio);
+            const renderX = margin + (signBoxWidth - renderWidth) / 2;
+            const renderY = y + (signBoxHeight - renderHeight) / 2;
+            pdf.addImage(signatureDataUrl, signatureFormat, renderX, renderY, renderWidth, renderHeight);
+            y += signBoxHeight + 8;
+          }
+        }
+      }
     }
 
     drawRule();
@@ -1381,7 +1446,10 @@ export default function DocumentsPage() {
       }
 
       let pdfPath = selectedDocument.pdf_path;
-      if (!pdfPath) {
+      if (selectedDocument.type === "contract" && selectedDocument.status === "signed") {
+        // Always regenerate signed contracts so the latest captured signature is embedded.
+        pdfPath = await generateAndUploadPdf(selectedDocument);
+      } else if (!pdfPath) {
         pdfPath = await generateAndUploadPdf(selectedDocument);
       }
 
