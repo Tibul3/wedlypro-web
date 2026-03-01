@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ensureSupplierProfile, getSupabaseBrowserClient } from "../lib/supabaseClient";
@@ -21,6 +21,26 @@ type SupplierRow = {
   billing_enforcement: string | null;
   entitlement_expires_at: string | null;
   trial_ends_at: string | null;
+  web_notifications_read_at: string | null;
+};
+
+type SignedContractRow = {
+  id: string;
+  client_id: string;
+  signed_at: string;
+};
+
+type ClientNameRow = {
+  id: string;
+  name_1: string | null;
+  name_2: string | null;
+};
+
+type ContractNotification = {
+  documentId: string;
+  clientName: string;
+  signedAt: string;
+  read: boolean;
 };
 
 const navItems: NavItem[] = [
@@ -85,6 +105,26 @@ function hasBillingAccess(supplier: SupplierRow): boolean {
   return false;
 }
 
+function clientDisplayName(client: ClientNameRow | null): string {
+  if (!client) return "Client";
+  const name1 = client.name_1?.trim() || "";
+  const name2 = client.name_2?.trim() || "";
+  if (name1 && name2) return `${name1} & ${name2}`;
+  return name1 || name2 || "Client";
+}
+
+function formatNotificationDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function ProductLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -94,6 +134,117 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
   const [email, setEmail] = useState<string | null>(null);
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [supplierError, setSupplierError] = useState<string | null>(null);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<ContractNotification[]>([]);
+  const notificationsRef = useRef<HTMLDivElement | null>(null);
+
+  const unreadNotifications = notifications.filter((item) => !item.read).length;
+
+  const loadContractNotifications = async (supplierRow: SupplierRow) => {
+    if (!supabase) return;
+
+    setNotificationsLoading(true);
+    setNotificationsError(null);
+
+    const { data: docsData, error: docsError } = await supabase
+      .from("documents")
+      .select("id,client_id,signed_at")
+      .eq("supplier_id", supplierRow.id)
+      .eq("type", "contract")
+      .eq("status", "signed")
+      .not("signed_at", "is", null)
+      .order("signed_at", { ascending: false })
+      .limit(20);
+
+    if (docsError) {
+      setNotificationsLoading(false);
+      setNotificationsError(docsError.message);
+      return;
+    }
+
+    const signedRows = (docsData ?? []) as SignedContractRow[];
+    if (signedRows.length === 0) {
+      setNotifications([]);
+      setNotificationsLoading(false);
+      return;
+    }
+
+    const clientIds = Array.from(new Set(signedRows.map((row) => row.client_id).filter(Boolean)));
+    const clientsMap = new Map<string, ClientNameRow>();
+
+    if (clientIds.length > 0) {
+      const { data: clientsData, error: clientsError } = await supabase
+        .from("clients")
+        .select("id,name_1,name_2")
+        .in("id", clientIds);
+
+      if (clientsError) {
+        setNotificationsLoading(false);
+        setNotificationsError(clientsError.message);
+        return;
+      }
+
+      for (const client of (clientsData ?? []) as ClientNameRow[]) {
+        clientsMap.set(client.id, client);
+      }
+    }
+
+    const readAtMs = supplierRow.web_notifications_read_at
+      ? new Date(supplierRow.web_notifications_read_at).getTime()
+      : 0;
+
+    const nextNotifications = signedRows.map((row) => {
+      const signedAtMs = new Date(row.signed_at).getTime();
+      return {
+        documentId: row.id,
+        clientName: clientDisplayName(clientsMap.get(row.client_id) ?? null),
+        signedAt: row.signed_at,
+        read: Number.isFinite(readAtMs) && readAtMs > 0 ? signedAtMs <= readAtMs : false,
+      };
+    });
+
+    setNotifications(nextNotifications);
+    setNotificationsLoading(false);
+  };
+
+  const markNotificationsRead = async () => {
+    if (!supabase || !supplier) return;
+
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase
+      .from("suppliers")
+      .update({ web_notifications_read_at: nowIso })
+      .eq("id", supplier.id);
+
+    if (error) {
+      if (/column .*web_notifications_read_at.* does not exist/i.test(error.message)) {
+        setNotificationsError("Run docs/web_notifications.sql in Supabase to enable web notifications.");
+      } else {
+        setNotificationsError(error.message);
+      }
+      return;
+    }
+
+    const updatedSupplier = { ...supplier, web_notifications_read_at: nowIso };
+    setSupplier(updatedSupplier);
+    setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+  };
+
+  useEffect(() => {
+    if (!notificationsOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (notificationsRef.current && !notificationsRef.current.contains(target)) {
+        setNotificationsOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [notificationsOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -123,11 +274,41 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
         return;
       }
 
-      const { data: supplierData, error } = await supabase
-        .from("suppliers")
-        .select("id,user_id,tier,plan,entitlement_source,subscription_status,billing_enforcement,entitlement_expires_at,trial_ends_at")
-        .eq("user_id", session.user.id)
-        .maybeSingle<SupplierRow>();
+      let supplierData: SupplierRow | null = null;
+      let error: { message: string } | null = null;
+
+      {
+        const { data, error: queryError } = await supabase
+          .from("suppliers")
+          .select(
+            "id,user_id,tier,plan,entitlement_source,subscription_status,billing_enforcement,entitlement_expires_at,trial_ends_at,web_notifications_read_at",
+          )
+          .eq("user_id", session.user.id)
+          .maybeSingle<SupplierRow>();
+        supplierData = data;
+        error = queryError ? { message: queryError.message } : null;
+      }
+
+      if (error && /column .*web_notifications_read_at.* does not exist/i.test(error.message)) {
+        const fallback = await supabase
+          .from("suppliers")
+          .select(
+            "id,user_id,tier,plan,entitlement_source,subscription_status,billing_enforcement,entitlement_expires_at,trial_ends_at",
+          )
+          .eq("user_id", session.user.id)
+          .maybeSingle<
+            Omit<SupplierRow, "web_notifications_read_at"> & {
+              web_notifications_read_at?: string | null;
+            }
+          >();
+        supplierData = fallback.data
+          ? {
+              ...fallback.data,
+              web_notifications_read_at: null,
+            }
+          : null;
+        error = fallback.error ? { message: fallback.error.message } : null;
+      }
 
       if (!mounted) return;
 
@@ -148,6 +329,7 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
       setSupplier(supplierData);
       setSupplierError(null);
       setCheckingAuth(false);
+      void loadContractNotifications(supplierData);
 
       if (blocked && pathname && !pathname.startsWith("/app/billing")) {
         router.replace("/app/billing");
@@ -257,6 +439,95 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
               disabled
               className="w-40 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500 md:w-56"
             />
+            <div className="relative" ref={notificationsRef}>
+              <button
+                type="button"
+                onClick={() => setNotificationsOpen((current) => !current)}
+                className="relative inline-flex h-8 w-8 items-center justify-center rounded-full border border-black/10 bg-zinc-50 text-zinc-600 transition hover:bg-zinc-100"
+                aria-label="Open notifications"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5" />
+                  <path d="M9.5 17a2.5 2.5 0 0 0 5 0" />
+                </svg>
+                {unreadNotifications > 0 ? (
+                  <span className="absolute -right-1 -top-1 inline-flex min-h-[18px] min-w-[18px] items-center justify-center rounded-full bg-zinc-900 px-1 text-[10px] font-semibold text-white">
+                    {unreadNotifications > 9 ? "9+" : unreadNotifications}
+                  </span>
+                ) : null}
+              </button>
+              {notificationsOpen ? (
+                <div className="absolute right-0 z-30 mt-2 w-[320px] rounded-xl border border-black/10 bg-white p-2 shadow-[0_20px_40px_-20px_rgba(16,24,40,0.35)]">
+                  <div className="flex items-center justify-between px-1 pb-2">
+                    <p className="text-sm font-semibold text-zinc-900">Notifications</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void loadContractNotifications(supplier)}
+                        className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-700 hover:underline"
+                      >
+                        Refresh
+                      </button>
+                      {unreadNotifications > 0 ? (
+                        <button
+                          type="button"
+                          onClick={() => void markNotificationsRead()}
+                          className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-700 hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {notificationsLoading ? (
+                    <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                      Loading notifications...
+                    </p>
+                  ) : null}
+
+                  {!notificationsLoading && notificationsError ? (
+                    <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      {notificationsError}
+                    </p>
+                  ) : null}
+
+                  {!notificationsLoading && !notificationsError && notifications.length === 0 ? (
+                    <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                      No signed contracts yet.
+                    </p>
+                  ) : null}
+
+                  {!notificationsLoading && !notificationsError && notifications.length > 0 ? (
+                    <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                      {notifications.map((item) => (
+                        <Link
+                          key={item.documentId}
+                          href="/app/documents"
+                          onClick={() => setNotificationsOpen(false)}
+                          className={`block rounded-lg border px-3 py-2 transition ${
+                            item.read
+                              ? "border-black/10 bg-white hover:bg-zinc-50"
+                              : "border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50"
+                          }`}
+                        >
+                          <p className="text-sm text-zinc-900">Signed contract: {item.clientName}</p>
+                          <p className="mt-1 text-xs text-zinc-500">{formatNotificationDate(item.signedAt)}</p>
+                        </Link>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <span className="inline-flex rounded-full border border-black/10 bg-zinc-50 px-3 py-1 text-xs text-zinc-600">
               {tierLabel(supplier.tier, supplier.plan)} - {sourceLabel(supplier.entitlement_source)}
             </span>
