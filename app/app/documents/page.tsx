@@ -14,6 +14,7 @@ type SupplierRow = {
   business_name: string | null;
   email: string | null;
   contact_name: string | null;
+  logo_path: string | null;
 };
 
 type ClientRow = {
@@ -84,6 +85,7 @@ const documentTypes: DocumentType[] = ["quote", "invoice", "contract"];
 const documentStatuses: DocumentStatus[] = ["draft", "sent", "paid", "signed"];
 const contractsUpgradeMessage = "Contracts are available on Professional. Upgrade in Billing to create contracts.";
 const copyrightNotice = "© 2026 Wedly Pro. All rights reserved.";
+const supplierLogoBucket = "supplier-logos";
 
 const blankContractDetails: ContractDetails = {
   servicesIncluded: "",
@@ -200,6 +202,29 @@ function slugifyFileName(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "document";
+}
+
+async function toDataUrlFromSignedUrl(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Failed reading logo blob"));
+      reader.onloadend = () => resolve(String(reader.result ?? ""));
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+function imageFormatFromDataUrl(dataUrl: string): "PNG" | "JPEG" | null {
+  const normalized = dataUrl.slice(0, 48).toLowerCase();
+  if (normalized.startsWith("data:image/png")) return "PNG";
+  if (normalized.startsWith("data:image/jpeg") || normalized.startsWith("data:image/jpg")) return "JPEG";
+  return null;
 }
 
 function formFromDocument(document: DocumentRow): DocumentForm {
@@ -330,7 +355,7 @@ export default function DocumentsPage() {
 
     const { data: supplierData, error: supplierError } = await supabase
       .from("suppliers")
-      .select("id,tier,plan,business_name,email,contact_name")
+      .select("id,tier,plan,business_name,email,contact_name,logo_path")
       .eq("user_id", session.user.id)
       .maybeSingle<SupplierRow>();
 
@@ -739,6 +764,7 @@ export default function DocumentsPage() {
     const linkedClient = clientsById.get(document.client_id) ?? null;
     const safeClientName = clientDisplayName(linkedClient);
     const supplierName = supplier.business_name?.trim() || "Wedly Pro Supplier";
+    const canUseBranding = isProfessionalSupplier(supplier);
 
     const pdf = new jsPDF({ unit: "pt", format: "a4" });
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -805,6 +831,16 @@ export default function DocumentsPage() {
       y += 4;
     };
 
+    let logoDataUrl: string | null = null;
+    if (canUseBranding && supplier.logo_path?.trim()) {
+      const { data: signedLogo, error: signedLogoError } = await supabase.storage
+        .from(supplierLogoBucket)
+        .createSignedUrl(supplier.logo_path.trim(), 60 * 30);
+      if (!signedLogoError && signedLogo?.signedUrl) {
+        logoDataUrl = await toDataUrlFromSignedUrl(signedLogo.signedUrl);
+      }
+    }
+
     // Header band
     const headerHeight = 94;
     ensureSpace(headerHeight + 8);
@@ -815,14 +851,27 @@ export default function DocumentsPage() {
     const statusLabel = displayDocumentStatus(document.type, document.status);
     const createdLabel = formatDateTime(document.created_at);
 
+    let logoRightX = margin + 16;
+    if (logoDataUrl) {
+      const format = imageFormatFromDataUrl(logoDataUrl);
+      if (format) {
+        const logoWidth = 66;
+        const logoHeight = 36;
+        pdf.setFillColor(255, 255, 255);
+        pdf.roundedRect(margin + 16, y + 14, logoWidth, logoHeight, 6, 6, "F");
+        pdf.addImage(logoDataUrl, format, margin + 19, y + 17, logoWidth - 6, logoHeight - 6);
+        logoRightX = margin + 94;
+      }
+    }
+
     pdf.setTextColor(255, 255, 255);
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(16);
-    pdf.text(`${typeLabel}`, margin + 16, y + 26);
+    pdf.text(`${typeLabel}`, logoRightX, y + 26);
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(11);
-    pdf.text(supplierName, margin + 16, y + 44);
-    pdf.text(safeClientName, margin + 16, y + 60);
+    pdf.text(supplierName, logoRightX, y + 44);
+    pdf.text(safeClientName, logoRightX, y + 60);
 
     pdf.setFont("helvetica", "bold");
     pdf.setFontSize(9);
@@ -867,7 +916,7 @@ export default function DocumentsPage() {
       pdf.setTextColor(82, 82, 91);
       pdf.text("Description", margin + 10, y + 14);
       pdf.text("Amount", pageWidth - margin - 90, y + 14);
-      y += 28;
+      y += 36;
 
       if (items.length === 0) {
         writeText("No line items.", { size: 11, color: [82, 82, 91] });
@@ -881,19 +930,21 @@ export default function DocumentsPage() {
           pdf.setFontSize(11);
           pdf.setTextColor(24, 24, 27);
           const descriptionLines = pdf.splitTextToSize(description, contentWidth - 110) as string[];
-          const rowHeight = Math.max(18, descriptionLines.length * 13);
-          ensureSpace(rowHeight + 8);
+          const rowHeight = Math.max(24, descriptionLines.length * 14);
+          ensureSpace(rowHeight + 12);
+          const rowStartY = y + 2;
           descriptionLines.forEach((line, idx) => {
-            pdf.text(line, margin + 10, y + idx * 13);
+            pdf.text(line, margin + 10, rowStartY + idx * 14);
           });
-          pdf.text(amount, pageWidth - margin - 90, y);
-          y += rowHeight + 4;
+          pdf.text(amount, pageWidth - margin - 90, rowStartY);
+          y += rowHeight + 8;
           pdf.setDrawColor(228, 228, 231);
           pdf.line(margin + 2, y, pageWidth - margin - 2, y);
-          y += 8;
+          y += 12;
         });
       }
 
+      y += 8;
       ensureSpace(44);
       pdf.setFont("helvetica", "bold");
       pdf.setFontSize(11);
