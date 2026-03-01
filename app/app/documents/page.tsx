@@ -902,8 +902,6 @@ export default function DocumentsPage() {
       if (format) {
         const logoWidth = 84;
         const logoHeight = 64;
-        pdf.setFillColor(255, 255, 255);
-        pdf.roundedRect(margin + 16, y + 14, logoWidth, logoHeight, 6, 6, "F");
         const properties = pdf.getImageProperties(logoDataUrl);
         const sourceWidth = Number(properties.width || 1);
         const sourceHeight = Number(properties.height || 1);

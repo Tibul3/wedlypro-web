@@ -144,6 +144,12 @@ export default function SettingsPage() {
   const [paymentIban, setPaymentIban] = useState("");
   const [paymentBic, setPaymentBic] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
+  const [passwordCurrent, setPasswordCurrent] = useState("");
+  const [passwordNext, setPasswordNext] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
 
   const proEnabled = isProfessional(supplier?.tier ?? null, supplier?.plan ?? null);
 
@@ -499,6 +505,73 @@ export default function SettingsPage() {
     }
   };
 
+  const handleUpdatePassword = async () => {
+    if (!supabase) return;
+
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    if (!passwordCurrent || !passwordNext || !passwordConfirm) {
+      setPasswordError("Enter current password, new password, and confirm password.");
+      return;
+    }
+
+    if (passwordNext !== passwordConfirm) {
+      setPasswordError("New password and confirm password do not match.");
+      return;
+    }
+
+    const strongEnough =
+      passwordNext.length >= 8 && /[a-z]/i.test(passwordNext) && /\d/.test(passwordNext);
+    if (!strongEnough) {
+      setPasswordError("New password must be at least 8 characters and include letters and numbers.");
+      return;
+    }
+
+    if (passwordCurrent === passwordNext) {
+      setPasswordError("New password must be different from current password.");
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user?.email) {
+      setPasswordError("Unable to verify current account. Please sign in again.");
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const { error: reauthError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: passwordCurrent,
+      });
+
+      if (reauthError) {
+        throw new Error("Current password is incorrect.");
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({ password: passwordNext });
+      if (updateError) {
+        throw new Error(updateError.message);
+      }
+
+      setPasswordCurrent("");
+      setPasswordNext("");
+      setPasswordConfirm("");
+      setPasswordSuccess("Password updated successfully.");
+    } catch (updatePasswordError) {
+      const message =
+        updatePasswordError instanceof Error ? updatePasswordError.message : "Unable to update password.";
+      setPasswordError(message);
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   if (loading) {
     return <p className="text-sm text-zinc-600">Loading settings...</p>;
   }
@@ -784,6 +857,61 @@ export default function SettingsPage() {
         </p>
 
         {message ? <p className="mt-2 text-sm text-emerald-700">{message}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
+        <h3 className="text-sm font-semibold text-zinc-900">Change password</h3>
+        <p className="mt-1 text-sm text-zinc-600">
+          Re-enter your current password, then set a new one.
+        </p>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <label className="text-xs text-zinc-600 sm:col-span-2">
+            Current password
+            <input
+              type="password"
+              value={passwordCurrent}
+              onChange={(event) => setPasswordCurrent(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+            />
+          </label>
+          <label className="text-xs text-zinc-600">
+            New password
+            <input
+              type="password"
+              value={passwordNext}
+              onChange={(event) => setPasswordNext(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+            />
+          </label>
+          <label className="text-xs text-zinc-600">
+            Confirm new password
+            <input
+              type="password"
+              value={passwordConfirm}
+              onChange={(event) => setPasswordConfirm(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+            />
+          </label>
+        </div>
+
+        <p className="mt-2 text-xs text-zinc-500">
+          Use at least 8 characters with letters and numbers.
+        </p>
+
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={handleUpdatePassword}
+            disabled={passwordSaving}
+            className="btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {passwordSaving ? "Updating..." : "Update password"}
+          </button>
+        </div>
+
+        {passwordError ? <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{passwordError}</p> : null}
+        {passwordSuccess ? <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{passwordSuccess}</p> : null}
       </section>
 
       <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
