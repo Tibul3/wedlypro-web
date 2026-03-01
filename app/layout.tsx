@@ -83,9 +83,6 @@ export default function RootLayout({
               <Link className="hover:text-zinc-900" href="/support">
                 Support
               </Link>
-              <Link className="hover:text-zinc-900" href="/support">
-                Contact
-              </Link>
               <Link className="hover:text-zinc-900" href="/login">
                 Log in
               </Link>
