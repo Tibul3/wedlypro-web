@@ -887,7 +887,7 @@ export default function DocumentsPage() {
     }
 
     // Header band
-    const headerHeight = 94;
+    const headerHeight = 106;
     ensureSpace(headerHeight + 8);
     pdf.setFillColor(brand.r, brand.g, brand.b);
     pdf.roundedRect(margin, y, contentWidth, headerHeight, 10, 10, "F");
@@ -900,8 +900,8 @@ export default function DocumentsPage() {
     if (logoDataUrl) {
       const format = imageFormatFromDataUrl(logoDataUrl);
       if (format) {
-        const logoWidth = 106;
-        const logoHeight = 44;
+        const logoWidth = 84;
+        const logoHeight = 64;
         pdf.setFillColor(255, 255, 255);
         pdf.roundedRect(margin + 16, y + 14, logoWidth, logoHeight, 6, 6, "F");
         const properties = pdf.getImageProperties(logoDataUrl);
@@ -915,7 +915,7 @@ export default function DocumentsPage() {
         const renderX = margin + 16 + (logoWidth - renderWidth) / 2;
         const renderY = y + 14 + (logoHeight - renderHeight) / 2;
         pdf.addImage(logoDataUrl, format, renderX, renderY, renderWidth, renderHeight);
-        logoRightX = margin + 130;
+        logoRightX = margin + 112;
       }
     }
 
