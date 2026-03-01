@@ -35,6 +35,12 @@ type InspirationViewer = {
   caption: string;
 };
 
+type DisplayItem = {
+  key: string;
+  label: string;
+  value: string;
+};
+
 const INSPIRATION_BUCKET = "inspiration";
 const MAX_INSPIRATION_IMAGES = 20;
 const clientStatusOptions = ["active", "archived", "converted"];
@@ -102,6 +108,28 @@ function formFromClient(client: ClientRow): ClientForm {
     venue: pickFirstText(client, ["venue"]) ?? "",
     notes: stripStructuredClientNotes(rawNotes),
   };
+}
+
+function clientDisplayItems(client: ClientRow): DisplayItem[] {
+  const notes = pickFirstText(client, ["notes"]);
+  const ordered: DisplayItem[] = [];
+  const push = (key: string, label: string, value: string | null) => {
+    if (!value) return;
+    ordered.push({ key, label, value });
+  };
+
+  push("status", "Status", pickFirstText(client, ["status"]));
+  push("full_name", "Full name", pickFirstText(client, ["name_1", "name", "client_name"]));
+  push("partner_name", "Partner's name", pickFirstText(client, ["name_2"]));
+  push("email", "Email", pickFirstText(client, ["email"]));
+  push("phone", "Phone", pickFirstText(client, ["phone"]));
+  push("partner_phone", "Partner's phone number", extractPartnerPhone(notes));
+  push("wedding_date", "Wedding date", pickFirstText(client, ["wedding_date", "event_date"]));
+  push("venue", "Venue", pickFirstText(client, ["venue"]));
+  push("home_address", "Home address", extractHomeAddress(notes));
+  push("notes", "Notes", stripStructuredClientNotes(notes));
+
+  return ordered;
 }
 
 function toText(value: unknown): string | null {
@@ -578,32 +606,22 @@ export default function ClientDetailPage() {
         </div>
       ) : (
         <dl className="grid gap-2 text-sm md:grid-cols-2">
+          {clientDisplayItems(client).map((item) => (
+            <div key={item.key} className="rounded-lg border border-black/10 px-3 py-2">
+              <dt className="text-xs uppercase tracking-wide text-zinc-500">{item.label}</dt>
+              <dd className="mt-1 break-words text-zinc-800">{item.value}</dd>
+            </div>
+          ))}
           {Object.entries(client)
             .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-            .slice(0, 24)
-            .map(([key, value]) => {
-              const displayValue =
-                key === "notes" ? stripStructuredClientNotes(String(value)) : String(value);
-              if (!displayValue) return null;
-              return (
-                <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                  <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
-                  <dd className="mt-1 break-words text-zinc-800">{displayValue}</dd>
-                </div>
-              );
-            })}
-          {extractPartnerPhone(pickFirstText(client, ["notes"])) ? (
-            <div className="rounded-lg border border-black/10 px-3 py-2">
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>
-              <dd className="mt-1 break-words text-zinc-800">{extractPartnerPhone(pickFirstText(client, ["notes"]))}</dd>
-            </div>
-          ) : null}
-          {extractHomeAddress(pickFirstText(client, ["notes"])) ? (
-            <div className="rounded-lg border border-black/10 px-3 py-2">
-              <dt className="text-xs uppercase tracking-wide text-zinc-500">Home address</dt>
-              <dd className="mt-1 break-words text-zinc-800">{extractHomeAddress(pickFirstText(client, ["notes"]))}</dd>
-            </div>
-          ) : null}
+            .filter(([key]) => !["status", "name_1", "name_2", "name", "client_name", "email", "phone", "wedding_date", "event_date", "venue", "notes"].includes(key))
+            .slice(0, 8)
+            .map(([key, value]) => (
+              <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
+                <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
+              </div>
+            ))}
         </dl>
       )}
 

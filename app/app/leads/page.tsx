@@ -26,6 +26,12 @@ type LeadForm = {
   notes: string;
 };
 
+type TimelineNote = {
+  id: string;
+  body: string;
+  created_at: string | null;
+};
+
 const defaultStatusOrder = ["new", "contacted", "discovery_booked", "quoted", "won", "lost", "converted", "booked"];
 const hiddenByDefaultStatuses = new Set(["converted", "archived", "lost"]);
 
@@ -160,6 +166,13 @@ export default function LeadsPage() {
 
   const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
   const [form, setForm] = useState<LeadForm>(emptyForm);
+  const [timelineNotes, setTimelineNotes] = useState<TimelineNote[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [noteInput, setNoteInput] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteBody, setEditingNoteBody] = useState("");
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
 
   const loadData = async () => {
     if (!supabase) {
@@ -245,6 +258,37 @@ export default function LeadsPage() {
     [visibleLeads, selectedLeadId],
   );
 
+  const loadTimelineNotes = async (leadId: string) => {
+    if (!supabase || !supplierId) return;
+    setNotesLoading(true);
+    const { data, error: notesError } = await supabase
+      .from("lead_notes")
+      .select("id,body,created_at")
+      .eq("lead_id", leadId)
+      .eq("supplier_id", supplierId)
+      .order("created_at", { ascending: false });
+
+    if (notesError) {
+      setNotesLoading(false);
+      setError(notesError.message);
+      return;
+    }
+
+    setTimelineNotes((data as TimelineNote[]) ?? []);
+    setNotesLoading(false);
+  };
+
+  useEffect(() => {
+    setNoteInput("");
+    setEditingNoteId(null);
+    setEditingNoteBody("");
+    if (!selectedLead?.id) {
+      setTimelineNotes([]);
+      return;
+    }
+    void loadTimelineNotes(selectedLead.id);
+  }, [selectedLead?.id, supplierId]);
+
   const startCreate = () => {
     setEditingLeadId("new");
     setForm(emptyForm);
@@ -326,6 +370,102 @@ export default function LeadsPage() {
     }
 
     setSaving(false);
+  };
+
+  const archiveToggleLead = async () => {
+    if (!supabase || !selectedLead?.id) return;
+    const currentStatus = normalizeStatus(pickFirstText(selectedLead, ["status"]));
+    const nextStatus = currentStatus === "archived" ? "New" : "Archived";
+    const confirmed = window.confirm(
+      currentStatus === "archived" ? "Unarchive this lead?" : "Archive this lead?",
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    const { error: updateError } = await supabase
+      .from("leads")
+      .update({ status: nextStatus })
+      .eq("id", selectedLead.id);
+
+    setSaving(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    await loadData();
+  };
+
+  const deleteLead = async () => {
+    if (!supabase || !selectedLead?.id) return;
+    const confirmed = window.confirm("Delete this lead permanently?");
+    if (!confirmed) return;
+
+    setSaving(true);
+    const { error: deleteError } = await supabase.from("leads").delete().eq("id", selectedLead.id);
+    setSaving(false);
+
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+
+    setSelectedLeadId(null);
+    await loadData();
+  };
+
+  const addNote = async () => {
+    if (!supabase || !supplierId || !selectedLead?.id) return;
+    if (!noteInput.trim()) return;
+    setSavingNote(true);
+    const { error: insertError } = await supabase.from("lead_notes").insert({
+      supplier_id: supplierId,
+      lead_id: selectedLead.id,
+      body: noteInput.trim(),
+    });
+    setSavingNote(false);
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+    setNoteInput("");
+    await loadTimelineNotes(selectedLead.id);
+  };
+
+  const saveEditedNote = async () => {
+    if (!supabase || !editingNoteId || !selectedLead?.id || !supplierId) return;
+    if (!editingNoteBody.trim()) return;
+    setSavingNote(true);
+    const { error: updateError } = await supabase
+      .from("lead_notes")
+      .update({ body: editingNoteBody.trim() })
+      .eq("id", editingNoteId)
+      .eq("supplier_id", supplierId);
+    setSavingNote(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setEditingNoteId(null);
+    setEditingNoteBody("");
+    await loadTimelineNotes(selectedLead.id);
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!supabase || !supplierId || !selectedLead?.id) return;
+    const confirmed = window.confirm("Delete this note?");
+    if (!confirmed) return;
+    setDeletingNoteId(noteId);
+    const { error: deleteError } = await supabase
+      .from("lead_notes")
+      .delete()
+      .eq("id", noteId)
+      .eq("supplier_id", supplierId);
+    setDeletingNoteId(null);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    await loadTimelineNotes(selectedLead.id);
   };
 
   if (loading) {
@@ -518,17 +658,125 @@ export default function LeadsPage() {
           ) : !selectedLead ? (
             <p className="text-sm text-zinc-600">Select a lead card to view details.</p>
           ) : (
-            <dl className="space-y-2 text-sm">
-              {Object.entries(selectedLead)
-                .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                .slice(0, 18)
-                .map(([key, value]) => (
-                  <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{leadFieldLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-                  </div>
-                ))}
-            </dl>
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={archiveToggleLead}
+                  disabled={saving}
+                  className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                >
+                  {normalizeStatus(pickFirstText(selectedLead, ["status"])) === "archived" ? "Unarchive" : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  onClick={deleteLead}
+                  disabled={saving}
+                  className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
+                >
+                  Delete
+                </button>
+              </div>
+
+              <dl className="space-y-2 text-sm">
+                {Object.entries(selectedLead)
+                  .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
+                  .slice(0, 18)
+                  .map(([key, value]) => (
+                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{leadFieldLabel(key)}</dt>
+                      <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
+                    </div>
+                  ))}
+              </dl>
+
+              <section className="rounded-lg border border-black/10 p-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Timeline notes</h4>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                    placeholder="Add note..."
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={addNote}
+                    disabled={savingNote || !noteInput.trim()}
+                    className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 disabled:opacity-60"
+                  >
+                    Add
+                  </button>
+                </div>
+                {notesLoading ? <p className="mt-2 text-xs text-zinc-500">Loading notes...</p> : null}
+                <div className="mt-2 space-y-2">
+                  {timelineNotes.map((note) => (
+                    <div key={note.id} className="rounded-lg border border-black/10 px-2.5 py-2">
+                      {editingNoteId === note.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            rows={3}
+                            className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                            value={editingNoteBody}
+                            onChange={(e) => setEditingNoteBody(e.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditedNote}
+                              disabled={savingNote || !editingNoteBody.trim()}
+                              className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 disabled:opacity-60"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingNoteId(null);
+                                setEditingNoteBody("");
+                              }}
+                              className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="break-words text-sm text-zinc-800">{note.body}</p>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            {note.created_at ? new Date(note.created_at).toLocaleString("en-GB") : "No date"}
+                          </p>
+                          <div className="mt-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingNoteId(note.id);
+                                setEditingNoteBody(note.body);
+                              }}
+                              className="rounded-lg border border-black/10 px-2 py-1 text-[11px] text-zinc-700"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void deleteNote(note.id)}
+                              disabled={deletingNoteId === note.id}
+                              className="rounded-lg border border-red-200 px-2 py-1 text-[11px] text-red-700 disabled:opacity-60"
+                            >
+                              {deletingNoteId === note.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {!notesLoading && timelineNotes.length === 0 ? (
+                    <p className="text-xs text-zinc-500">No notes yet.</p>
+                  ) : null}
+                </div>
+              </section>
+            </div>
           )}
         </aside>
       </div>
