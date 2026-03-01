@@ -31,6 +31,18 @@ type InspirationImage = {
   created_at: string | null;
 };
 
+type DisplayItem = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+type TimelineNote = {
+  id: string;
+  body: string;
+  created_at: string | null;
+};
+
 type InspirationViewer = {
   url: string;
   caption: string;
@@ -206,6 +218,28 @@ function formFromClient(client: ClientRow): ClientForm {
   };
 }
 
+function clientDisplayItems(client: ClientRow): DisplayItem[] {
+  const notes = pickFirstText(client, ["notes"]);
+  const ordered: DisplayItem[] = [];
+  const push = (key: string, label: string, value: string | null) => {
+    if (!value) return;
+    ordered.push({ key, label, value });
+  };
+
+  push("status", "Status", pickFirstText(client, ["status"]));
+  push("full_name", "Full name", pickFirstText(client, ["name_1", "name", "client_name"]));
+  push("partner_name", "Partner's name", pickFirstText(client, ["name_2"]));
+  push("email", "Email", pickFirstText(client, ["email"]));
+  push("phone", "Phone", pickFirstText(client, ["phone"]));
+  push("partner_phone", "Partner's phone number", extractPartnerPhone(notes));
+  push("wedding_date", "Wedding date", pickFirstText(client, ["wedding_date", "event_date"]));
+  push("venue", "Venue", pickFirstText(client, ["venue"]));
+  push("home_address", "Home address", extractHomeAddress(notes));
+  push("notes", "Notes", stripStructuredClientNotes(notes));
+
+  return ordered;
+}
+
 export default function ClientsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -227,6 +261,13 @@ export default function ClientsPage() {
   const [inspirationError, setInspirationError] = useState<string | null>(null);
   const [refreshingImageId, setRefreshingImageId] = useState<string | null>(null);
   const [viewer, setViewer] = useState<InspirationViewer | null>(null);
+  const [timelineNotes, setTimelineNotes] = useState<TimelineNote[]>([]);
+  const [notesLoading, setNotesLoading] = useState(false);
+  const [noteInput, setNoteInput] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [editingNoteBody, setEditingNoteBody] = useState("");
+  const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
 
   const loadData = async () => {
     if (!supabase) {
@@ -310,6 +351,26 @@ export default function ClientsPage() {
     [visibleClients, selectedClientId],
   );
 
+  const loadTimelineNotes = async (clientId: string) => {
+    if (!supabase || !supplierId) return;
+    setNotesLoading(true);
+    const { data, error: notesError } = await supabase
+      .from("client_notes")
+      .select("id,body,created_at")
+      .eq("client_id", clientId)
+      .eq("supplier_id", supplierId)
+      .order("created_at", { ascending: false });
+
+    if (notesError) {
+      setNotesLoading(false);
+      setError(notesError.message);
+      return;
+    }
+
+    setTimelineNotes((data as TimelineNote[]) ?? []);
+    setNotesLoading(false);
+  };
+
   const loadInspirations = async (clientId: string) => {
     if (!supabase || !supplierId) return;
     setInspirationLoading(true);
@@ -363,9 +424,14 @@ export default function ClientsPage() {
       setInspirationImages([]);
       setInspirationCaption("");
       setInspirationError(null);
+      setTimelineNotes([]);
+      setNoteInput("");
+      setEditingNoteId(null);
+      setEditingNoteBody("");
       return;
     }
     void loadInspirations(selectedClient.id);
+    void loadTimelineNotes(selectedClient.id);
   }, [selectedClient?.id, supplierId]);
 
   const startCreate = () => {
@@ -555,6 +621,102 @@ export default function ClientsPage() {
     setInspirationImages((prev) =>
       prev.map((item) => (item.id === imageId ? { ...item, preview_url: previewUrl } : item)),
     );
+  };
+
+  const archiveToggleClient = async () => {
+    if (!supabase || !selectedClient?.id) return;
+    const currentStatus = normalizeStatus(pickFirstText(selectedClient, ["status"]));
+    const nextStatus = currentStatus === "archived" ? "active" : "archived";
+    const confirmed = window.confirm(
+      currentStatus === "archived" ? "Unarchive this client?" : "Archive this client?",
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    const { error: updateError } = await supabase
+      .from("clients")
+      .update({ status: nextStatus })
+      .eq("id", selectedClient.id);
+    setSaving(false);
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    await loadData();
+  };
+
+  const deleteClient = async () => {
+    if (!supabase || !selectedClient?.id) return;
+    const confirmed = window.confirm("Delete this client permanently?");
+    if (!confirmed) return;
+
+    setSaving(true);
+    const { error: deleteError } = await supabase.from("clients").delete().eq("id", selectedClient.id);
+    setSaving(false);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+
+    setSelectedClientId(null);
+    await loadData();
+  };
+
+  const addNote = async () => {
+    if (!supabase || !supplierId || !selectedClient?.id) return;
+    if (!noteInput.trim()) return;
+    setSavingNote(true);
+    const { error: insertError } = await supabase.from("client_notes").insert({
+      supplier_id: supplierId,
+      client_id: selectedClient.id,
+      body: noteInput.trim(),
+    });
+    setSavingNote(false);
+    if (insertError) {
+      setError(insertError.message);
+      return;
+    }
+    setNoteInput("");
+    await loadTimelineNotes(selectedClient.id);
+  };
+
+  const saveEditedNote = async () => {
+    if (!supabase || !supplierId || !selectedClient?.id || !editingNoteId) return;
+    if (!editingNoteBody.trim()) return;
+    setSavingNote(true);
+    const { error: updateError } = await supabase
+      .from("client_notes")
+      .update({ body: editingNoteBody.trim() })
+      .eq("id", editingNoteId)
+      .eq("supplier_id", supplierId);
+    setSavingNote(false);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setEditingNoteId(null);
+    setEditingNoteBody("");
+    await loadTimelineNotes(selectedClient.id);
+  };
+
+  const deleteNote = async (noteId: string) => {
+    if (!supabase || !supplierId || !selectedClient?.id) return;
+    const confirmed = window.confirm("Delete this note?");
+    if (!confirmed) return;
+    setDeletingNoteId(noteId);
+    const { error: deleteError } = await supabase
+      .from("client_notes")
+      .delete()
+      .eq("id", noteId)
+      .eq("supplier_id", supplierId);
+    setDeletingNoteId(null);
+    if (deleteError) {
+      setError(deleteError.message);
+      return;
+    }
+    await loadTimelineNotes(selectedClient.id);
   };
 
   if (loading) {
@@ -758,34 +920,132 @@ export default function ClientsPage() {
             <p className="text-sm text-zinc-600">Select a client to view details.</p>
           ) : (
             <div className="space-y-4">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={archiveToggleClient}
+                  disabled={saving}
+                  className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+                >
+                  {normalizeStatus(pickFirstText(selectedClient, ["status"])) === "archived"
+                    ? "Unarchive"
+                    : "Archive"}
+                </button>
+                <button
+                  type="button"
+                  onClick={deleteClient}
+                  disabled={saving}
+                  className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
+                >
+                  Delete
+                </button>
+              </div>
+
               <dl className="space-y-2 text-sm">
+                {clientDisplayItems(selectedClient).map((item) => (
+                  <div key={item.key} className="rounded-lg border border-black/10 px-3 py-2">
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{item.label}</dt>
+                    <dd className="mt-1 break-words text-zinc-800">{item.value}</dd>
+                  </div>
+                ))}
                 {Object.entries(selectedClient)
                   .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                  .slice(0, 18)
-                  .map(([key, value]) => {
-                    const displayValue =
-                      key === "notes" ? stripStructuredClientNotes(String(value)) : String(value);
-                    if (!displayValue) return null;
-                    return (
-                      <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                        <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
-                        <dd className="mt-1 break-words text-zinc-800">{displayValue}</dd>
-                      </div>
-                    );
-                  })}
-                {extractPartnerPhone(pickFirstText(selectedClient, ["notes"])) ? (
-                  <div className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">Partner's phone number</dt>
-                    <dd className="mt-1 break-words text-zinc-800">{extractPartnerPhone(pickFirstText(selectedClient, ["notes"]))}</dd>
-                  </div>
-                ) : null}
-                {extractHomeAddress(pickFirstText(selectedClient, ["notes"])) ? (
-                  <div className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">Home address</dt>
-                    <dd className="mt-1 break-words text-zinc-800">{extractHomeAddress(pickFirstText(selectedClient, ["notes"]))}</dd>
-                  </div>
-                ) : null}
+                  .filter(([key]) => !["status", "name_1", "name_2", "name", "client_name", "email", "phone", "wedding_date", "event_date", "venue", "notes"].includes(key))
+                  .slice(0, 8)
+                  .map(([key, value]) => (
+                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
+                      <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
+                    </div>
+                  ))}
               </dl>
+
+              <section className="rounded-lg border border-black/10 p-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Timeline notes</h4>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                    placeholder="Add note..."
+                    value={noteInput}
+                    onChange={(e) => setNoteInput(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={addNote}
+                    disabled={savingNote || !noteInput.trim()}
+                    className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 disabled:opacity-60"
+                  >
+                    Add
+                  </button>
+                </div>
+                {notesLoading ? <p className="mt-2 text-xs text-zinc-500">Loading notes...</p> : null}
+                <div className="mt-2 space-y-2">
+                  {timelineNotes.map((note) => (
+                    <div key={note.id} className="rounded-lg border border-black/10 px-2.5 py-2">
+                      {editingNoteId === note.id ? (
+                        <div className="space-y-2">
+                          <textarea
+                            rows={3}
+                            className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                            value={editingNoteBody}
+                            onChange={(e) => setEditingNoteBody(e.target.value)}
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={saveEditedNote}
+                              disabled={savingNote || !editingNoteBody.trim()}
+                              className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 disabled:opacity-60"
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingNoteId(null);
+                                setEditingNoteBody("");
+                              }}
+                              className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <p className="break-words text-sm text-zinc-800">{note.body}</p>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            {note.created_at ? new Date(note.created_at).toLocaleString("en-GB") : "No date"}
+                          </p>
+                          <div className="mt-1 flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingNoteId(note.id);
+                                setEditingNoteBody(note.body);
+                              }}
+                              className="rounded-lg border border-black/10 px-2 py-1 text-[11px] text-zinc-700"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void deleteNote(note.id)}
+                              disabled={deletingNoteId === note.id}
+                              className="rounded-lg border border-red-200 px-2 py-1 text-[11px] text-red-700 disabled:opacity-60"
+                            >
+                              {deletingNoteId === note.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {!notesLoading && timelineNotes.length === 0 ? (
+                    <p className="text-xs text-zinc-500">No notes yet.</p>
+                  ) : null}
+                </div>
+              </section>
 
               <section className="rounded-lg border border-black/10 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
