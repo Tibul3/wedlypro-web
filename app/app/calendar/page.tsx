@@ -13,12 +13,22 @@ type KeyDateForm = {
   title: string;
   datetime_local: string;
   reminder_minutes: string;
+  link_type: "client" | "lead";
+  link_id: string;
 };
 
 const emptyForm: KeyDateForm = {
   title: "",
   datetime_local: "",
   reminder_minutes: "60",
+  link_type: "client",
+  link_id: "",
+};
+
+type LinkedRecord = {
+  id: string;
+  name_1: string | null;
+  name_2: string | null;
 };
 
 function toText(value: unknown): string | null {
@@ -58,8 +68,29 @@ function displayDate(item: KeyDateRow): string {
   );
 }
 
-function displayClient(item: KeyDateRow): string {
-  return pickFirstText(item, ["client_name", "name", "client_id", "lead_id"]) ?? "No client linked";
+function recordDisplayName(record: LinkedRecord): string {
+  const first = toText(record.name_1);
+  const second = toText(record.name_2);
+  if (first && second) return `${first} & ${second}`;
+  return first ?? second ?? record.id;
+}
+
+function displayLinkedRecord(
+  item: KeyDateRow,
+  clientsById: Map<string, LinkedRecord>,
+  leadsById: Map<string, LinkedRecord>,
+): string {
+  const clientId = pickFirstText(item, ["client_id"]);
+  if (clientId && clientsById.has(clientId)) {
+    return `Client: ${recordDisplayName(clientsById.get(clientId) as LinkedRecord)}`;
+  }
+  const leadId = pickFirstText(item, ["lead_id"]);
+  if (leadId && leadsById.has(leadId)) {
+    return `Lead: ${recordDisplayName(leadsById.get(leadId) as LinkedRecord)}`;
+  }
+  if (clientId) return `Client: ${clientId}`;
+  if (leadId) return `Lead: ${leadId}`;
+  return "No client/lead linked";
 }
 
 function toDateTimeLocalValue(value: string | null): string {
@@ -92,10 +123,14 @@ function isTechnicalField(key: string): boolean {
 }
 
 function formFromKeyDate(item: KeyDateRow): KeyDateForm {
+  const clientId = pickFirstText(item, ["client_id"]);
+  const leadId = pickFirstText(item, ["lead_id"]);
   return {
     title: pickFirstText(item, ["title"]) ?? "",
     datetime_local: toDateTimeLocalValue(pickFirstText(item, ["datetime"])),
     reminder_minutes: pickFirstText(item, ["reminder_minutes"]) ?? "60",
+    link_type: clientId ? "client" : "lead",
+    link_id: clientId ?? leadId ?? "",
   };
 }
 
@@ -110,6 +145,8 @@ export default function CalendarPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<KeyDateForm>(emptyForm);
+  const [clients, setClients] = useState<LinkedRecord[]>([]);
+  const [leads, setLeads] = useState<LinkedRecord[]>([]);
 
   const loadData = async () => {
     if (!supabase) {
@@ -143,20 +180,45 @@ export default function CalendarPage() {
 
     setSupplierId(supplier.id);
 
-    const { data, error: queryError } = await supabase
-      .from("key_dates")
-      .select("*")
-      .eq("supplier_id", supplier.id)
-      .order("datetime", { ascending: true });
+    const [{ data, error: queryError }, { data: clientsData, error: clientsError }, { data: leadsData, error: leadsError }] =
+      await Promise.all([
+        supabase
+          .from("key_dates")
+          .select("*")
+          .eq("supplier_id", supplier.id)
+          .order("datetime", { ascending: true }),
+        supabase
+          .from("clients")
+          .select("id,name_1,name_2")
+          .eq("supplier_id", supplier.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("leads")
+          .select("id,name_1,name_2")
+          .eq("supplier_id", supplier.id)
+          .order("created_at", { ascending: false }),
+      ]);
 
     if (queryError) {
       setError(queryError.message);
       setLoading(false);
       return;
     }
+    if (clientsError) {
+      setError(clientsError.message);
+      setLoading(false);
+      return;
+    }
+    if (leadsError) {
+      setError(leadsError.message);
+      setLoading(false);
+      return;
+    }
 
     const rows = (data ?? []) as KeyDateRow[];
     setDates(rows);
+    setClients((clientsData ?? []) as LinkedRecord[]);
+    setLeads((leadsData ?? []) as LinkedRecord[]);
     setSelectedId((prev) => prev ?? rows[0]?.id ?? null);
     setLoading(false);
   };
@@ -175,10 +237,23 @@ export default function CalendarPage() {
   }, [supabase]);
 
   const selected = useMemo(() => dates.find((item) => item.id === selectedId) ?? null, [dates, selectedId]);
+  const clientsById = useMemo(() => new Map(clients.map((item) => [item.id, item])), [clients]);
+  const leadsById = useMemo(() => new Map(leads.map((item) => [item.id, item])), [leads]);
+  const linkOptions = useMemo(
+    () => (form.link_type === "client" ? clients : leads),
+    [form.link_type, clients, leads],
+  );
 
   const startCreate = () => {
     setEditingId("new");
-    setForm(emptyForm);
+    const fallbackClient = clients[0]?.id ?? "";
+    const fallbackLead = leads[0]?.id ?? "";
+    const linkType: "client" | "lead" = fallbackClient ? "client" : "lead";
+    setForm({
+      ...emptyForm,
+      link_type: linkType,
+      link_id: linkType === "client" ? fallbackClient : fallbackLead,
+    });
   };
 
   const startEdit = () => {
@@ -202,6 +277,10 @@ export default function CalendarPage() {
       setError("Date and time are required.");
       return;
     }
+    if (!form.link_id) {
+      setError("Please link this key date to a client or lead.");
+      return;
+    }
 
     const reminderMinutes = Number.parseInt(form.reminder_minutes || "0", 10);
     if (Number.isNaN(reminderMinutes) || reminderMinutes < 0) {
@@ -216,6 +295,8 @@ export default function CalendarPage() {
       title: form.title.trim(),
       datetime: new Date(form.datetime_local).toISOString(),
       reminder_minutes: reminderMinutes,
+      client_id: form.link_type === "client" ? form.link_id : null,
+      lead_id: form.link_type === "lead" ? form.link_id : null,
     };
 
     if (editingId === "new") {
@@ -337,7 +418,7 @@ export default function CalendarPage() {
                       {formatDateTime(pickFirstText(item, ["datetime", "date"]))}
                     </p>
                     <p className={`mt-1 truncate text-xs ${active ? "text-zinc-300" : "text-zinc-500"}`}>
-                      {displayClient(item)}
+                      {displayLinkedRecord(item, clientsById, leadsById)}
                     </p>
                   </button>
                 );
@@ -397,6 +478,36 @@ export default function CalendarPage() {
                   value={form.reminder_minutes}
                   onChange={(e) => setForm((prev) => ({ ...prev, reminder_minutes: e.target.value }))}
                 />
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Link type
+                <select
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.link_type}
+                  onChange={(e) => {
+                    const nextType = e.target.value as "client" | "lead";
+                    const defaultId = (nextType === "client" ? clients[0]?.id : leads[0]?.id) ?? "";
+                    setForm((prev) => ({ ...prev, link_type: nextType, link_id: defaultId }));
+                  }}
+                >
+                  <option value="client">Client</option>
+                  <option value="lead">Lead</option>
+                </select>
+              </label>
+              <label className="block text-xs text-zinc-600">
+                Link to {form.link_type}
+                <select
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.link_id}
+                  onChange={(e) => setForm((prev) => ({ ...prev, link_id: e.target.value }))}
+                >
+                  <option value="">Select...</option>
+                  {linkOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {recordDisplayName(item)}
+                    </option>
+                  ))}
+                </select>
               </label>
               <div className="flex gap-2 pt-2">
                 <button
