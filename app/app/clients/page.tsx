@@ -43,6 +43,13 @@ type TimelineNote = {
   created_at: string | null;
 };
 
+type ClientKeyDate = {
+  id: string;
+  title: string | null;
+  datetime: string | null;
+  reminder_minutes: number | null;
+};
+
 type InspirationViewer = {
   url: string;
   caption: string;
@@ -240,6 +247,13 @@ function clientDisplayItems(client: ClientRow): DisplayItem[] {
   return ordered;
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) return "No date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("en-GB");
+}
+
 export default function ClientsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
@@ -268,6 +282,8 @@ export default function ClientsPage() {
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editingNoteBody, setEditingNoteBody] = useState("");
   const [deletingNoteId, setDeletingNoteId] = useState<string | null>(null);
+  const [clientKeyDates, setClientKeyDates] = useState<ClientKeyDate[]>([]);
+  const [keyDatesLoading, setKeyDatesLoading] = useState(false);
 
   const loadData = async () => {
     if (!supabase) {
@@ -371,6 +387,26 @@ export default function ClientsPage() {
     setNotesLoading(false);
   };
 
+  const loadClientKeyDates = async (clientId: string) => {
+    if (!supabase || !supplierId) return;
+    setKeyDatesLoading(true);
+    const { data, error: keyDatesError } = await supabase
+      .from("key_dates")
+      .select("id,title,datetime,reminder_minutes")
+      .eq("client_id", clientId)
+      .eq("supplier_id", supplierId)
+      .order("datetime", { ascending: true });
+
+    if (keyDatesError) {
+      setKeyDatesLoading(false);
+      setError(keyDatesError.message);
+      return;
+    }
+
+    setClientKeyDates((data as ClientKeyDate[]) ?? []);
+    setKeyDatesLoading(false);
+  };
+
   const loadInspirations = async (clientId: string) => {
     if (!supabase || !supplierId) return;
     setInspirationLoading(true);
@@ -425,6 +461,7 @@ export default function ClientsPage() {
       setInspirationCaption("");
       setInspirationError(null);
       setTimelineNotes([]);
+      setClientKeyDates([]);
       setNoteInput("");
       setEditingNoteId(null);
       setEditingNoteBody("");
@@ -432,6 +469,7 @@ export default function ClientsPage() {
     }
     void loadInspirations(selectedClient.id);
     void loadTimelineNotes(selectedClient.id);
+    void loadClientKeyDates(selectedClient.id);
   }, [selectedClient?.id, supplierId]);
 
   const startCreate = () => {
@@ -959,6 +997,34 @@ export default function ClientsPage() {
                     </div>
                   ))}
               </dl>
+
+              <section className="rounded-lg border border-black/10 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Key dates</h4>
+                  <Link
+                    href={selectedClient ? `/app/calendar` : "/app/calendar"}
+                    className="rounded-lg border border-black/10 px-2 py-1 text-[11px] text-zinc-700 hover:bg-zinc-50"
+                  >
+                    Open calendar
+                  </Link>
+                </div>
+                {keyDatesLoading ? <p className="text-xs text-zinc-500">Loading key dates...</p> : null}
+                {!keyDatesLoading && clientKeyDates.length === 0 ? (
+                  <p className="text-xs text-zinc-500">No key dates for this client.</p>
+                ) : null}
+                <div className="space-y-2">
+                  {clientKeyDates.slice(0, 3).map((item) => (
+                    <Link
+                      key={item.id}
+                      href={`/app/calendar?selected=${item.id}`}
+                      className="block rounded-lg border border-black/10 px-2.5 py-2 text-xs text-zinc-700 hover:bg-zinc-50"
+                    >
+                      <p className="font-medium text-zinc-900">{item.title ?? "Untitled"}</p>
+                      <p className="mt-1 text-zinc-600">{formatDateTime(item.datetime)}</p>
+                    </Link>
+                  ))}
+                </div>
+              </section>
 
               <section className="rounded-lg border border-black/10 p-3">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-zinc-700">Timeline notes</h4>

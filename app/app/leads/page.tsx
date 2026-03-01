@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type LeadRow = {
@@ -155,6 +156,7 @@ function formFromLead(lead: LeadRow): LeadForm {
 
 export default function LeadsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const searchParams = useSearchParams();
 
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [leads, setLeads] = useState<LeadRow[]>([]);
@@ -257,6 +259,14 @@ export default function LeadsPage() {
     () => visibleLeads.find((lead) => lead.id === selectedLeadId) ?? null,
     [visibleLeads, selectedLeadId],
   );
+
+  useEffect(() => {
+    const requestedId = searchParams.get("selected");
+    if (!requestedId) return;
+    if (visibleLeads.some((lead) => lead.id === requestedId)) {
+      setSelectedLeadId(requestedId);
+    }
+  }, [searchParams, visibleLeads]);
 
   const loadTimelineNotes = async (leadId: string) => {
     if (!supabase || !supplierId) return;

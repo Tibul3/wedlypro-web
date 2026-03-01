@@ -13,6 +13,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [calendarSyncEnabled, setCalendarSyncEnabled] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -146,6 +147,43 @@ export default function SettingsPage() {
         </p>
 
         {message ? <p className="mt-2 text-sm text-emerald-700">{message}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
+        <h3 className="text-sm font-semibold text-zinc-900">Calendar sync</h3>
+        <p className="mt-1 text-sm text-zinc-600">
+          Connect an external calendar so key dates can be synced outside Wedly Pro.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-400"
+          >
+            Connect Google Calendar (Coming soon)
+          </button>
+          <button
+            type="button"
+            disabled
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-400"
+          >
+            Connect Outlook (Coming soon)
+          </button>
+          <button
+            type="button"
+            onClick={() => setCalendarSyncEnabled((prev) => !prev)}
+            className={`rounded-lg border px-3 py-2 text-sm ${
+              calendarSyncEnabled
+                ? "border-zinc-900 bg-zinc-900 text-white"
+                : "border-black/10 bg-white text-zinc-800"
+            }`}
+          >
+            {calendarSyncEnabled ? "Auto-sync enabled (local preview)" : "Enable auto-sync (local preview)"}
+          </button>
+        </div>
+        <p className="mt-3 text-xs text-zinc-500">
+          Full provider integration requires OAuth setup and server webhooks. This section is staged for that rollout.
+        </p>
       </section>
     </div>
   );
