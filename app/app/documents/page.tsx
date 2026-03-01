@@ -282,17 +282,128 @@ function formFromDocument(document: DocumentRow): DocumentForm {
   };
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function wrapEmailHtml(params: {
+  logoUrl?: string | null;
+  supplierName: string;
+  heading: string;
+  paragraphs: string[];
+  signoff: string;
+  replyEmail?: string | null;
+  actionLabel?: string | null;
+  actionUrl?: string | null;
+  secondaryActionLabel?: string | null;
+  secondaryActionUrl?: string | null;
+}) {
+  const {
+    logoUrl,
+    supplierName,
+    heading,
+    paragraphs,
+    signoff,
+    replyEmail,
+    actionLabel,
+    actionUrl,
+    secondaryActionLabel,
+    secondaryActionUrl,
+  } = params;
+
+  const safeSupplier = escapeHtml(supplierName);
+  const safeHeading = escapeHtml(heading);
+  const paragraphHtml = paragraphs
+    .map((line) => `<p style="margin:0 0 12px;line-height:1.6;color:#111827;">${escapeHtml(line)}</p>`)
+    .join("");
+  const primaryActionHtml =
+    actionLabel && actionUrl
+      ? `<div style="margin:0 0 8px;"><a href="${escapeHtml(
+          actionUrl,
+        )}" style="display:inline-block;background:#1f2937;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:8px;font-size:14px;">${escapeHtml(
+          actionLabel,
+        )}</a></div>`
+      : "";
+  const secondaryActionHtml =
+    secondaryActionLabel && secondaryActionUrl
+      ? `<div style="margin:0 0 8px;"><a href="${escapeHtml(
+          secondaryActionUrl,
+        )}" style="display:inline-block;background:#ffffff;color:#111827;text-decoration:none;padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;font-size:14px;">${escapeHtml(
+          secondaryActionLabel,
+        )}</a></div>`
+      : "";
+  const actionHtml =
+    primaryActionHtml || secondaryActionHtml
+      ? `<div style="margin:6px 0 14px;">${primaryActionHtml}${secondaryActionHtml}</div>`
+      : "";
+  const logoHtml = logoUrl
+    ? `<div style="margin:0 0 16px;"><img src="${escapeHtml(
+        logoUrl,
+      )}" alt="${safeSupplier} logo" style="max-width:160px;max-height:80px;display:block;" /></div>`
+    : "";
+  const replyHtml = replyEmail
+    ? `<p style="margin:0;color:#4b5563;line-height:1.6;">${escapeHtml(replyEmail)}</p>`
+    : "";
+  const noReplyHtml = replyEmail
+    ? `<p style="margin:12px 0 0;color:#6b7280;font-size:12px;line-height:1.5;">This email was sent from an unattended mailbox. For help, contact ${escapeHtml(
+        replyEmail,
+      )}.</p>`
+    : `<p style="margin:12px 0 0;color:#6b7280;font-size:12px;line-height:1.5;">This email was sent from an unattended mailbox. Please contact ${safeSupplier} directly for help.</p>`;
+  const copyrightHtml = `<p style="margin:8px 0 0;color:#9ca3af;font-size:11px;line-height:1.5;">${escapeHtml(
+    copyrightNotice,
+  )}</p>`;
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${safeHeading}</title>
+  </head>
+  <body style="margin:0;background:#f4f5f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+    <div style="max-width:640px;margin:0 auto;padding:20px;">
+      <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;">
+        ${logoHtml}
+        <h1 style="margin:0 0 14px;font-size:22px;color:#111827;">${safeHeading}</h1>
+        ${paragraphHtml}
+        ${actionHtml}
+        <div style="margin-top:20px;padding-top:12px;border-top:1px solid #e5e7eb;">
+          <p style="margin:0 0 6px;color:#4b5563;line-height:1.6;">Best regards,</p>
+          <p style="margin:0 0 2px;color:#111827;line-height:1.6;font-weight:600;">${escapeHtml(signoff)}</p>
+          ${replyHtml}
+          ${noReplyHtml}
+          ${copyrightHtml}
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+}
+
+function withReplyEmail(lines: string[], replyEmail?: string | null) {
+  const withReply = replyEmail ? [...lines, replyEmail] : lines;
+  return [...withReply, "", copyrightNotice];
+}
+
 function buildDocumentEmailTemplate(params: {
   documentType: DocumentType;
   supplierName: string;
   supplierSignoff: string;
+  supplierReplyEmail?: string | null;
   recipientName: string;
   totalLabel?: string | null;
-  reviewUrl?: string | null;
+  pdfUrl?: string | null;
   signingUrl?: string | null;
   contractSigned?: boolean;
+  logoUrl?: string | null;
 }) {
-  const typeLabel = params.documentType === "quote" ? "Quote" : params.documentType === "invoice" ? "Invoice" : "Contract";
+  const typeLabel =
+    params.documentType === "quote" ? "Quote" : params.documentType === "invoice" ? "Invoice" : "Contract";
   const isUnsignedContract = params.documentType === "contract" && !params.contractSigned;
 
   const subject =
@@ -302,30 +413,107 @@ function buildDocumentEmailTemplate(params: {
         : `Contract from ${params.supplierName}`
       : `Your ${typeLabel.toLowerCase()} from ${params.supplierName}`;
 
-  const lines: string[] = [`Hi ${params.recipientName},`, ""];
-  if (params.documentType === "contract" && params.contractSigned) {
-    lines.push(`Your signed contract from ${params.supplierName} is ready.`);
-  } else if (isUnsignedContract) {
-    lines.push(`Please review and sign your contract from ${params.supplierName}.`);
-  } else {
-    lines.push(`Your ${typeLabel.toLowerCase()} from ${params.supplierName} is ready.`);
-  }
+  const heading =
+    isUnsignedContract && params.signingUrl
+      ? "Review & Sign Contract"
+      : params.contractSigned
+        ? "Signed Contract"
+        : typeLabel;
 
-  if (params.totalLabel) {
-    lines.push(`Total: ${params.totalLabel}`);
-  }
+  const primaryActionLabel =
+    params.documentType === "contract"
+      ? params.contractSigned
+        ? params.pdfUrl
+          ? "Open signed contract"
+          : null
+        : params.pdfUrl
+          ? "Review contract"
+          : params.signingUrl
+            ? "Sign contract"
+            : null
+      : params.pdfUrl
+        ? `Open ${typeLabel}`
+        : null;
 
-  if (params.reviewUrl) {
-    lines.push("", `Open document: ${params.reviewUrl}`);
-  }
-  if (params.signingUrl) {
-    lines.push("", `Sign contract: ${params.signingUrl}`);
-  }
+  const primaryActionUrl =
+    params.documentType === "contract"
+      ? params.contractSigned
+        ? params.pdfUrl ?? null
+        : params.pdfUrl ?? params.signingUrl ?? null
+      : params.pdfUrl ?? null;
 
-  lines.push("", "Best regards,", params.supplierSignoff);
+  const secondaryActionLabel =
+    isUnsignedContract && params.pdfUrl && params.signingUrl ? "Sign contract" : null;
+  const secondaryActionUrl =
+    isUnsignedContract && params.pdfUrl && params.signingUrl ? params.signingUrl : null;
 
-  const textBody = lines.join("\n");
-  const htmlBody = `<p>${textBody.replace(/\n/g, "<br />")}</p>`;
+  const paragraphs = [
+    `Hi ${params.recipientName},`,
+    params.documentType === "contract" && params.contractSigned
+      ? `This signed ${typeLabel.toLowerCase()} copy was sent by ${params.supplierName}.`
+      : `This ${typeLabel.toLowerCase()} was sent by ${params.supplierName}.`,
+    ...(params.totalLabel ? [`Total: ${params.totalLabel}`] : []),
+    params.documentType === "contract"
+      ? params.contractSigned
+        ? "This copy includes the final signature details for your records."
+        : "Please review the contract and contact us if you have any questions before signing."
+      : "Please review and contact us if you have any questions.",
+    ...(isUnsignedContract && params.pdfUrl && params.signingUrl
+      ? ["Step 1: Review contract. Step 2: Sign contract using the secure signing button."]
+      : []),
+    ...(params.pdfUrl
+      ? [
+          `Open your ${params.contractSigned ? `signed ${typeLabel.toLowerCase()}` : typeLabel.toLowerCase()} copy: ${params.pdfUrl}`,
+        ]
+      : []),
+    ...(isUnsignedContract && params.signingUrl
+      ? ["Use the Sign contract button below to complete your signature."]
+      : []),
+    ...(isUnsignedContract && params.signingUrl ? [`Sign your contract: ${params.signingUrl}`] : []),
+  ];
+
+  const textBody = withReplyEmail(
+    [
+      `Hi ${params.recipientName},`,
+      "",
+      params.documentType === "contract" && params.contractSigned
+        ? `This signed ${typeLabel.toLowerCase()} copy was sent by ${params.supplierName}.`
+        : `This ${typeLabel.toLowerCase()} was sent by ${params.supplierName}.`,
+      ...(params.totalLabel ? [`Total: ${params.totalLabel}`] : []),
+      "",
+      params.documentType === "contract"
+        ? params.contractSigned
+          ? "This copy includes the final signature details for your records."
+          : "Please review the contract and contact us if you have any questions before signing."
+        : "Please review and contact us if you have any questions.",
+      ...(isUnsignedContract && params.pdfUrl && params.signingUrl
+        ? ["Step 1: Review contract. Step 2: Sign contract using the secure signing link."]
+        : []),
+      ...(params.pdfUrl
+        ? [
+            `Open your ${params.contractSigned ? `signed ${typeLabel.toLowerCase()}` : typeLabel.toLowerCase()} copy: ${params.pdfUrl}`,
+          ]
+        : []),
+      ...(params.signingUrl && !params.contractSigned ? [`Sign your contract: ${params.signingUrl}`] : []),
+      "",
+      "Best regards,",
+      params.supplierSignoff,
+    ],
+    params.supplierReplyEmail,
+  ).join("\n");
+
+  const htmlBody = wrapEmailHtml({
+    logoUrl: params.logoUrl,
+    supplierName: params.supplierName,
+    heading,
+    paragraphs,
+    signoff: params.supplierSignoff,
+    replyEmail: params.supplierReplyEmail,
+    actionLabel: primaryActionLabel,
+    actionUrl: primaryActionUrl,
+    secondaryActionLabel,
+    secondaryActionUrl,
+  });
 
   return {
     subject,
@@ -796,8 +984,40 @@ export default function DocumentsPage() {
     });
 
     if (sendError) {
-      throw new Error(sendError.message);
+      let message = sendError.message;
+      const context = (sendError as { context?: Response }).context;
+      if (context) {
+        try {
+          const raw = await context.text();
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw);
+              message =
+                (parsed?.error as string | undefined) ??
+                (parsed?.message as string | undefined) ??
+                raw;
+            } catch {
+              message = raw;
+            }
+          }
+        } catch {
+          // Keep original message.
+        }
+      }
+      throw new Error(message);
     }
+  };
+
+  const resolveSupplierEmailLogoUrl = async (): Promise<string | null> => {
+    if (!supabase || !supplier) return null;
+    if (!isProfessionalSupplier(supplier)) return null;
+    if (!supplier.logo_path?.trim()) return null;
+
+    const { data, error } = await supabase.storage
+      .from(supplierLogoBucket)
+      .createSignedUrl(supplier.logo_path.trim(), 60 * 60 * 24 * 7);
+    if (error || !data?.signedUrl) return null;
+    return data.signedUrl;
   };
 
   const generateAndUploadPdf = async (document: DocumentRow): Promise<string> => {
@@ -1128,16 +1348,22 @@ export default function DocumentsPage() {
       const supplierName = supplier.business_name?.trim() || "your wedding supplier";
       const supplierSignoff = supplier.contact_name?.trim() || supplierName;
       const recipientName = clientDisplayName(linkedClient);
+      const logoUrl = await resolveSupplierEmailLogoUrl();
 
       if (selectedDocument.type === "contract" && selectedDocument.status !== "signed") {
         const signingUrl = await createContractSigningLink(selectedDocument);
+        const existingPdfUrl =
+          selectedDocument.pdf_path ? await createSecureDocumentLink(selectedDocument, selectedDocument.pdf_path) : null;
         const template = buildDocumentEmailTemplate({
           documentType: "contract",
           supplierName,
           supplierSignoff,
+          supplierReplyEmail: supplier.email,
           recipientName,
+          pdfUrl: existingPdfUrl,
           signingUrl,
           contractSigned: false,
+          logoUrl,
         });
 
         await sendDocumentEmail({
@@ -1164,13 +1390,15 @@ export default function DocumentsPage() {
         documentType: selectedDocument.type,
         supplierName,
         supplierSignoff,
+        supplierReplyEmail: supplier.email,
         recipientName,
         totalLabel:
           selectedDocument.type === "contract"
             ? null
             : formatMoney(Number(selectedDocument.total || 0), selectedDocument.currency),
-        reviewUrl: secureUrl,
+        pdfUrl: secureUrl,
         contractSigned: selectedDocument.type === "contract" && selectedDocument.status === "signed",
+        logoUrl,
       });
 
       await sendDocumentEmail({
