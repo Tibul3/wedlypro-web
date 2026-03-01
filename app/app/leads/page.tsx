@@ -372,29 +372,6 @@ export default function LeadsPage() {
     setSaving(false);
   };
 
-  const archiveToggleLead = async () => {
-    if (!supabase || !selectedLead?.id) return;
-    const currentStatus = normalizeStatus(pickFirstText(selectedLead, ["status"]));
-    const nextStatus = currentStatus === "archived" ? "New" : "Archived";
-    const confirmed = window.confirm(
-      currentStatus === "archived" ? "Unarchive this lead?" : "Archive this lead?",
-    );
-    if (!confirmed) return;
-
-    setSaving(true);
-    const { error: updateError } = await supabase
-      .from("leads")
-      .update({ status: nextStatus })
-      .eq("id", selectedLead.id);
-
-    setSaving(false);
-    if (updateError) {
-      setError(updateError.message);
-      return;
-    }
-    await loadData();
-  };
-
   const deleteLead = async () => {
     if (!supabase || !selectedLead?.id) return;
     const confirmed = window.confirm("Delete this lead permanently?");
@@ -660,14 +637,6 @@ export default function LeadsPage() {
           ) : (
             <div className="space-y-4">
               <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={archiveToggleLead}
-                  disabled={saving}
-                  className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-                >
-                  {normalizeStatus(pickFirstText(selectedLead, ["status"])) === "archived" ? "Unarchive" : "Archive"}
-                </button>
                 <button
                   type="button"
                   onClick={deleteLead}
