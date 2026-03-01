@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type KeyDateRow = {
@@ -29,6 +31,7 @@ type LinkedRecord = {
   id: string;
   name_1: string | null;
   name_2: string | null;
+  status?: string | null;
 };
 
 function toText(value: unknown): string | null {
@@ -75,6 +78,20 @@ function recordDisplayName(record: LinkedRecord): string {
   return first ?? second ?? record.id;
 }
 
+function normalizeStatus(rawStatus: string | null | undefined): string {
+  if (!rawStatus) return "";
+  return rawStatus.trim().toLowerCase();
+}
+
+function isActiveClient(record: LinkedRecord): boolean {
+  return normalizeStatus(record.status) === "active";
+}
+
+function isActiveLead(record: LinkedRecord): boolean {
+  const status = normalizeStatus(record.status);
+  return status !== "archived" && status !== "converted" && status !== "lost";
+}
+
 function displayLinkedRecord(
   item: KeyDateRow,
   clientsById: Map<string, LinkedRecord>,
@@ -91,6 +108,14 @@ function displayLinkedRecord(
   if (clientId) return `Client: ${clientId}`;
   if (leadId) return `Lead: ${leadId}`;
   return "No client/lead linked";
+}
+
+function linkedRecordTarget(item: KeyDateRow): { href: string; label: string } | null {
+  const clientId = pickFirstText(item, ["client_id"]);
+  if (clientId) return { href: `/app/clients/${clientId}`, label: "Open client" };
+  const leadId = pickFirstText(item, ["lead_id"]);
+  if (leadId) return { href: `/app/leads?selected=${leadId}`, label: "Open lead" };
+  return null;
 }
 
 function toDateTimeLocalValue(value: string | null): string {
@@ -136,6 +161,7 @@ function formFromKeyDate(item: KeyDateRow): KeyDateForm {
 
 export default function CalendarPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const searchParams = useSearchParams();
 
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [dates, setDates] = useState<KeyDateRow[]>([]);
@@ -189,12 +215,12 @@ export default function CalendarPage() {
           .order("datetime", { ascending: true }),
         supabase
           .from("clients")
-          .select("id,name_1,name_2")
+          .select("id,name_1,name_2,status")
           .eq("supplier_id", supplier.id)
           .order("created_at", { ascending: false }),
         supabase
           .from("leads")
-          .select("id,name_1,name_2")
+          .select("id,name_1,name_2,status")
           .eq("supplier_id", supplier.id)
           .order("created_at", { ascending: false }),
       ]);
@@ -237,17 +263,37 @@ export default function CalendarPage() {
   }, [supabase]);
 
   const selected = useMemo(() => dates.find((item) => item.id === selectedId) ?? null, [dates, selectedId]);
+  const selectedLinkedTarget = useMemo(
+    () => (selected ? linkedRecordTarget(selected) : null),
+    [selected],
+  );
   const clientsById = useMemo(() => new Map(clients.map((item) => [item.id, item])), [clients]);
   const leadsById = useMemo(() => new Map(leads.map((item) => [item.id, item])), [leads]);
+  const activeClients = useMemo(() => clients.filter(isActiveClient), [clients]);
+  const activeLeads = useMemo(() => leads.filter(isActiveLead), [leads]);
   const linkOptions = useMemo(
-    () => (form.link_type === "client" ? clients : leads),
-    [form.link_type, clients, leads],
+    () => {
+      const source = form.link_type === "client" ? activeClients : activeLeads;
+      if (!form.link_id) return source;
+      if (source.some((item) => item.id === form.link_id)) return source;
+      const fallback = form.link_type === "client" ? clientsById.get(form.link_id) : leadsById.get(form.link_id);
+      return fallback ? [fallback, ...source] : source;
+    },
+    [form.link_type, activeClients, activeLeads, form.link_id, clientsById, leadsById],
   );
+
+  useEffect(() => {
+    const requestedId = searchParams.get("selected");
+    if (!requestedId) return;
+    if (dates.some((item) => item.id === requestedId)) {
+      setSelectedId(requestedId);
+    }
+  }, [searchParams, dates]);
 
   const startCreate = () => {
     setEditingId("new");
-    const fallbackClient = clients[0]?.id ?? "";
-    const fallbackLead = leads[0]?.id ?? "";
+    const fallbackClient = activeClients[0]?.id ?? "";
+    const fallbackLead = activeLeads[0]?.id ?? "";
     const linkType: "client" | "lead" = fallbackClient ? "client" : "lead";
     setForm({
       ...emptyForm,
@@ -432,6 +478,14 @@ export default function CalendarPage() {
             <h3 className="text-sm font-semibold text-zinc-900">{isEditing ? "Edit key date" : "Date details"}</h3>
             {!isEditing && selected ? (
               <div className="flex gap-2">
+                {selectedLinkedTarget ? (
+                  <Link
+                    href={selectedLinkedTarget.href}
+                    className="rounded-lg border border-black/10 px-2.5 py-1 text-xs text-zinc-700 hover:bg-zinc-50"
+                  >
+                    {selectedLinkedTarget.label}
+                  </Link>
+                ) : null}
                 <button
                   type="button"
                   onClick={startEdit}
@@ -486,7 +540,7 @@ export default function CalendarPage() {
                   value={form.link_type}
                   onChange={(e) => {
                     const nextType = e.target.value as "client" | "lead";
-                    const defaultId = (nextType === "client" ? clients[0]?.id : leads[0]?.id) ?? "";
+                    const defaultId = (nextType === "client" ? activeClients[0]?.id : activeLeads[0]?.id) ?? "";
                     setForm((prev) => ({ ...prev, link_type: nextType, link_id: defaultId }));
                   }}
                 >
