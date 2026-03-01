@@ -139,7 +139,10 @@ function formatDateTime(value: string | null): string {
 
 function isTechnicalField(key: string): boolean {
   return (
+    key === "id" ||
     key === "supplier_id" ||
+    key === "client_id" ||
+    key === "lead_id" ||
     key === "created_at" ||
     key === "updated_at" ||
     key === "calendar_event_id" ||
@@ -477,7 +480,7 @@ export default function CalendarPage() {
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-zinc-900">{isEditing ? "Edit key date" : "Date details"}</h3>
             {!isEditing && selected ? (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2 justify-end">
                 {selectedLinkedTarget ? (
                   <Link
                     href={selectedLinkedTarget.href}
@@ -586,6 +589,12 @@ export default function CalendarPage() {
             <p className="mt-3 text-sm text-zinc-600">Select a key date to view details.</p>
           ) : (
             <dl className="mt-3 space-y-2 text-sm">
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <dt className="text-xs uppercase tracking-wide text-zinc-500">Linked to</dt>
+                <dd className="mt-1 break-words text-zinc-800">
+                  {displayLinkedRecord(selected, clientsById, leadsById)}
+                </dd>
+              </div>
               {Object.entries(selected)
                 .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
                 .slice(0, 18)
