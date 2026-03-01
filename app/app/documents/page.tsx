@@ -38,6 +38,15 @@ type ContractDetails = {
   specialTerms: string;
 };
 
+type InvoicePaymentDetails = {
+  accountName: string;
+  sortCode: string;
+  accountNumber: string;
+  iban: string | null;
+  bic: string | null;
+  paymentReference: string | null;
+};
+
 type DocumentContent = {
   lineItems?: DocumentLineItem[];
   invoiceNumber?: string;
@@ -225,6 +234,24 @@ function imageFormatFromDataUrl(dataUrl: string): "PNG" | "JPEG" | null {
   if (normalized.startsWith("data:image/png")) return "PNG";
   if (normalized.startsWith("data:image/jpeg") || normalized.startsWith("data:image/jpg")) return "JPEG";
   return null;
+}
+
+function parseInvoicePaymentDetailsRow(row: unknown): InvoicePaymentDetails | null {
+  if (!row || typeof row !== "object") return null;
+  const source = row as Record<string, unknown>;
+  const accountName = toText(source.account_name);
+  const sortCode = toText(source.sort_code);
+  const accountNumber = toText(source.account_number);
+  if (!accountName || !sortCode || !accountNumber) return null;
+
+  return {
+    accountName,
+    sortCode,
+    accountNumber,
+    iban: toText(source.iban),
+    bic: toText(source.bic),
+    paymentReference: toText(source.payment_reference),
+  };
 }
 
 function formFromDocument(document: DocumentRow): DocumentForm {
@@ -691,6 +718,23 @@ export default function DocumentsPage() {
     return signed.signedUrl;
   };
 
+  const getSupplierInvoicePaymentDetails = async (): Promise<InvoicePaymentDetails | null> => {
+    if (!supabase) return null;
+    const { data, error } = await supabase.rpc("get_supplier_payment_details_for_invoice");
+    if (error) {
+      // Keep invoice PDF generation resilient when payment-details migration is not present.
+      if (/Could not find the function|does not exist/i.test(error.message)) {
+        return null;
+      }
+      throw new Error(error.message);
+    }
+
+    if (Array.isArray(data)) {
+      return parseInvoicePaymentDetailsRow(data[0] ?? null);
+    }
+    return parseInvoicePaymentDetailsRow(data);
+  };
+
   const createContractSigningLink = async (document: DocumentRow): Promise<string> => {
     if (!supabase || !supplier) {
       throw new Error("Supabase is not configured.");
@@ -765,6 +809,7 @@ export default function DocumentsPage() {
     const safeClientName = clientDisplayName(linkedClient);
     const supplierName = supplier.business_name?.trim() || "Wedly Pro Supplier";
     const canUseBranding = isProfessionalSupplier(supplier);
+    const paymentDetails = document.type === "invoice" ? await getSupplierInvoicePaymentDetails() : null;
 
     const pdf = new jsPDF({ unit: "pt", format: "a4" });
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -855,12 +900,22 @@ export default function DocumentsPage() {
     if (logoDataUrl) {
       const format = imageFormatFromDataUrl(logoDataUrl);
       if (format) {
-        const logoWidth = 66;
-        const logoHeight = 36;
+        const logoWidth = 106;
+        const logoHeight = 44;
         pdf.setFillColor(255, 255, 255);
         pdf.roundedRect(margin + 16, y + 14, logoWidth, logoHeight, 6, 6, "F");
-        pdf.addImage(logoDataUrl, format, margin + 19, y + 17, logoWidth - 6, logoHeight - 6);
-        logoRightX = margin + 94;
+        const properties = pdf.getImageProperties(logoDataUrl);
+        const sourceWidth = Number(properties.width || 1);
+        const sourceHeight = Number(properties.height || 1);
+        const containerWidth = logoWidth - 10;
+        const containerHeight = logoHeight - 10;
+        const ratio = Math.min(containerWidth / sourceWidth, containerHeight / sourceHeight);
+        const renderWidth = Math.max(8, sourceWidth * ratio);
+        const renderHeight = Math.max(8, sourceHeight * ratio);
+        const renderX = margin + 16 + (logoWidth - renderWidth) / 2;
+        const renderY = y + 14 + (logoHeight - renderHeight) / 2;
+        pdf.addImage(logoDataUrl, format, renderX, renderY, renderWidth, renderHeight);
+        logoRightX = margin + 130;
       }
     }
 
@@ -952,7 +1007,24 @@ export default function DocumentsPage() {
       pdf.text(`Subtotal: ${formatMoney(Number(document.subtotal || 0), document.currency)}`, margin, y);
       y += 16;
       pdf.text(`Total: ${formatMoney(Number(document.total || 0), document.currency)}`, margin, y);
-      y += 8;
+      y += 14;
+
+      if (paymentDetails) {
+        drawRule();
+        drawSectionHeading("Payment Details");
+        drawField("Account Name", paymentDetails.accountName);
+        drawField("Sort Code", paymentDetails.sortCode);
+        drawField("Account Number", paymentDetails.accountNumber);
+        if (paymentDetails.iban) drawField("IBAN", paymentDetails.iban);
+        if (paymentDetails.bic) drawField("BIC", paymentDetails.bic);
+        if (paymentDetails.paymentReference) drawField("Payment Reference", paymentDetails.paymentReference);
+        writeText("Clients are advised to verify payment details directly with the supplier before making payment.", {
+          size: 9,
+          color: [113, 113, 122],
+          line: 12,
+        });
+        y += 4;
+      }
     } else {
       drawSectionHeading("Contract Terms");
       const details = {

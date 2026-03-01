@@ -16,10 +16,96 @@ type SupplierSettingsRow = {
   product_updates_opt_in: boolean | null;
 };
 
+type MaskedPaymentDetails = {
+  accountName: string;
+  sortCodeMasked: string;
+  accountNumberMasked: string;
+  ibanPresent: boolean;
+  bicPresent: boolean;
+  paymentReference: string | null;
+  updatedAt: string;
+};
+
+type EditablePaymentDetails = {
+  accountName: string;
+  sortCode: string;
+  accountNumber: string;
+  iban: string;
+  bic: string;
+  paymentReference: string;
+};
+
 const supplierLogoBucket = "supplier-logos";
 
 function isProfessional(tier: string | null, plan: string | null): boolean {
   return tier === "professional" || plan === "pro";
+}
+
+function digitsOnly(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function formatSortCodeInput(value: string) {
+  const digits = digitsOnly(value).slice(0, 6);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4)}`;
+}
+
+function mapPaymentDetailsError(message: string): string {
+  if (/Could not find the function|does not exist/i.test(message)) {
+    return "Payment details are not enabled yet in this environment.";
+  }
+  if (/Supplier profile not found/i.test(message)) {
+    return "Supplier profile not found. Please sign in again.";
+  }
+  if (/Password confirmation failed/i.test(message)) {
+    return "Password confirmation failed. Please check your password.";
+  }
+  return message;
+}
+
+function parseMaskedDetailsRow(input: unknown): MaskedPaymentDetails | null {
+  if (!input || typeof input !== "object") return null;
+  const row = input as Record<string, unknown>;
+  const accountName = typeof row.account_name === "string" ? row.account_name : "";
+  const sortCodeMasked = typeof row.sort_code_masked === "string" ? row.sort_code_masked : "";
+  const accountNumberMasked = typeof row.account_number_masked === "string" ? row.account_number_masked : "";
+  const updatedAt = typeof row.updated_at === "string" ? row.updated_at : "";
+
+  if (!accountName || !sortCodeMasked || !accountNumberMasked) return null;
+
+  return {
+    accountName,
+    sortCodeMasked,
+    accountNumberMasked,
+    ibanPresent: Boolean(row.iban_present),
+    bicPresent: Boolean(row.bic_present),
+    paymentReference: typeof row.payment_reference === "string" ? row.payment_reference : null,
+    updatedAt,
+  };
+}
+
+function parseEditableDetailsRow(input: unknown): EditablePaymentDetails | null {
+  if (!input || typeof input !== "object") return null;
+  const row = input as Record<string, unknown>;
+  const accountName = typeof row.account_name === "string" ? row.account_name : "";
+  const sortCode = typeof row.sort_code === "string" ? row.sort_code : "";
+  const accountNumber = typeof row.account_number === "string" ? row.account_number : "";
+
+  return {
+    accountName,
+    sortCode,
+    accountNumber,
+    iban: typeof row.iban === "string" ? row.iban : "",
+    bic: typeof row.bic === "string" ? row.bic : "",
+    paymentReference: typeof row.payment_reference === "string" ? row.payment_reference : "",
+  };
+}
+
+function getSingleRpcRow(data: unknown): unknown {
+  if (Array.isArray(data)) return data[0] ?? null;
+  return data;
 }
 
 export default function SettingsPage() {
@@ -44,9 +130,24 @@ export default function SettingsPage() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoRemoving, setLogoRemoving] = useState(false);
 
+  const [paymentDetailsMasked, setPaymentDetailsMasked] = useState<MaskedPaymentDetails | null>(null);
+  const [paymentDetailsLoading, setPaymentDetailsLoading] = useState(false);
+  const [paymentDetailsSaving, setPaymentDetailsSaving] = useState(false);
+  const [paymentDetailsError, setPaymentDetailsError] = useState<string | null>(null);
+  const [paymentDetailsSuccess, setPaymentDetailsSuccess] = useState<string | null>(null);
+  const [editingPaymentDetails, setEditingPaymentDetails] = useState(false);
+  const [paymentPasswordPromptVisible, setPaymentPasswordPromptVisible] = useState(false);
+  const [paymentPassword, setPaymentPassword] = useState("");
+  const [paymentAccountName, setPaymentAccountName] = useState("");
+  const [paymentSortCode, setPaymentSortCode] = useState("");
+  const [paymentAccountNumber, setPaymentAccountNumber] = useState("");
+  const [paymentIban, setPaymentIban] = useState("");
+  const [paymentBic, setPaymentBic] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+
   const proEnabled = isProfessional(supplier?.tier ?? null, supplier?.plan ?? null);
 
-  const loadLogoPreview = async (supplierId: string, logoPath: string | null) => {
+  const loadLogoPreview = async (logoPath: string | null) => {
     if (!supabase || !logoPath) {
       setLogoPreviewUrl(null);
       return;
@@ -62,6 +163,26 @@ export default function SettingsPage() {
     }
 
     setLogoPreviewUrl(data.signedUrl);
+  };
+
+  const loadMaskedPaymentDetails = async () => {
+    if (!supabase) return;
+
+    setPaymentDetailsLoading(true);
+    setPaymentDetailsError(null);
+
+    const { data, error: rpcError } = await supabase.rpc("get_supplier_payment_details_masked");
+
+    if (rpcError) {
+      setPaymentDetailsLoading(false);
+      setPaymentDetailsMasked(null);
+      setPaymentDetailsError(mapPaymentDetailsError(rpcError.message));
+      return;
+    }
+
+    const mapped = parseMaskedDetailsRow(getSingleRpcRow(data));
+    setPaymentDetailsMasked(mapped);
+    setPaymentDetailsLoading(false);
   };
 
   const loadSettings = async () => {
@@ -98,7 +219,8 @@ export default function SettingsPage() {
     setBusinessName(data.business_name ?? "");
     setContactName(data.contact_name ?? "");
     setReplyEmail(data.email ?? session.user.email ?? "");
-    await loadLogoPreview(data.id, data.logo_path ?? null);
+    await loadLogoPreview(data.logo_path ?? null);
+    await loadMaskedPaymentDetails();
     setLoading(false);
   };
 
@@ -229,6 +351,154 @@ export default function SettingsPage() {
     await loadSettings();
   };
 
+  const handleEditPaymentDetails = async () => {
+    if (!supabase) return;
+
+    setPaymentDetailsError(null);
+    setPaymentDetailsSuccess(null);
+
+    const { data, error: rpcError } = await supabase.rpc("get_supplier_payment_details_for_edit");
+
+    if (rpcError) {
+      setPaymentDetailsError(mapPaymentDetailsError(rpcError.message));
+      return;
+    }
+
+    const mapped = parseEditableDetailsRow(getSingleRpcRow(data));
+
+    setPaymentAccountName(mapped?.accountName ?? "");
+    setPaymentSortCode(formatSortCodeInput(mapped?.sortCode ?? ""));
+    setPaymentAccountNumber(mapped?.accountNumber ?? "");
+    setPaymentIban(mapped?.iban ?? "");
+    setPaymentBic(mapped?.bic ?? "");
+    setPaymentReference(mapped?.paymentReference ?? "");
+    setPaymentPassword("");
+    setPaymentPasswordPromptVisible(false);
+    setEditingPaymentDetails(true);
+  };
+
+  const handleCancelPaymentDetails = () => {
+    setEditingPaymentDetails(false);
+    setPaymentPasswordPromptVisible(false);
+    setPaymentPassword("");
+    setPaymentDetailsError(null);
+  };
+
+  const validatePaymentDetailsForm = () => {
+    const accountName = paymentAccountName.trim();
+    const sortCode = digitsOnly(paymentSortCode);
+    const accountNumber = digitsOnly(paymentAccountNumber);
+    const iban = paymentIban.trim().replace(/\s+/g, "").toUpperCase();
+    const bic = paymentBic.trim().replace(/\s+/g, "").toUpperCase();
+
+    if (!accountName) return "Account name is required.";
+    if (sortCode.length !== 6) return "Sort code must be 6 digits.";
+    if (accountNumber.length !== 8) return "Account number must be 8 digits.";
+    if (iban && (iban.length < 15 || iban.length > 34 || !/^[A-Z0-9]+$/.test(iban))) {
+      return "Enter a valid IBAN.";
+    }
+    if (bic && !/^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(bic)) {
+      return "BIC must be 8 or 11 letters/numbers.";
+    }
+    return null;
+  };
+
+  const handleSavePaymentDetails = async () => {
+    if (!supabase || !supplier) return;
+
+    const validationError = validatePaymentDetailsForm();
+    if (validationError) {
+      setPaymentDetailsError(validationError);
+      return;
+    }
+
+    setPaymentDetailsError(null);
+    setPaymentDetailsSuccess(null);
+
+    if (!paymentPasswordPromptVisible) {
+      setPaymentPasswordPromptVisible(true);
+      return;
+    }
+
+    const password = paymentPassword.trim();
+    if (!password) {
+      setPaymentDetailsError("Enter your password to confirm this change.");
+      return;
+    }
+
+    setPaymentDetailsSaving(true);
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user?.email) {
+        throw new Error("Unable to confirm current user.");
+      }
+
+      const { data: reauthData, error: reauthError } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password,
+      });
+
+      if (reauthError) {
+        throw new Error("Password confirmation failed.");
+      }
+
+      const sortCodeDigits = digitsOnly(paymentSortCode);
+      const accountNumberDigits = digitsOnly(paymentAccountNumber);
+
+      const { data, error: upsertError } = await supabase.rpc("upsert_supplier_payment_details", {
+        p_account_name: paymentAccountName.trim(),
+        p_sort_code: sortCodeDigits,
+        p_account_number: accountNumberDigits,
+        p_iban: paymentIban.trim() || null,
+        p_bic: paymentBic.trim() || null,
+        p_payment_reference: paymentReference.trim() || null,
+      });
+
+      if (upsertError) {
+        throw new Error(upsertError.message);
+      }
+
+      const mappedMasked = parseMaskedDetailsRow(getSingleRpcRow(data));
+      setPaymentDetailsMasked(mappedMasked);
+      setEditingPaymentDetails(false);
+      setPaymentPasswordPromptVisible(false);
+      setPaymentPassword("");
+      setPaymentDetailsSuccess("Payment details saved.");
+
+      const accessToken =
+        reauthData.session?.access_token ?? (await supabase.auth.getSession()).data.session?.access_token ?? null;
+
+      if (accessToken) {
+        const { error: notificationError } = await supabase.functions.invoke("notifyPaymentDetailsChanged", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: {
+            last4: accountNumberDigits.slice(-4),
+            sortCodeLast2: sortCodeDigits.slice(-2),
+            changedAt: new Date().toISOString(),
+          },
+        });
+
+        if (notificationError) {
+          setPaymentDetailsSuccess(`Payment details saved. Notification email failed: ${notificationError.message}`);
+        }
+      }
+
+      await loadMaskedPaymentDetails();
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Unable to save payment details.";
+      setPaymentDetailsError(mapPaymentDetailsError(message));
+    } finally {
+      setPaymentDetailsSaving(false);
+    }
+  };
+
   if (loading) {
     return <p className="text-sm text-zinc-600">Loading settings...</p>;
   }
@@ -300,7 +570,9 @@ export default function SettingsPage() {
           <p className="mt-1 text-xs text-zinc-500">Shown on Professional branded document PDFs and emails.</p>
 
           {logoPreviewUrl ? (
-            <img src={logoPreviewUrl} alt="Business logo preview" className="mt-3 h-16 w-auto rounded-md border border-black/10 bg-white p-1" />
+            <div className="mt-3 rounded-md border border-black/10 bg-white p-2">
+              <img src={logoPreviewUrl} alt="Business logo preview" className="h-16 w-auto object-contain" />
+            </div>
           ) : (
             <p className="mt-3 text-sm text-zinc-600">No logo uploaded yet.</p>
           )}
@@ -330,6 +602,156 @@ export default function SettingsPage() {
 
         {profileError ? <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{profileError}</p> : null}
         {profileMessage ? <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{profileMessage}</p> : null}
+      </section>
+
+      <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
+        <h3 className="text-sm font-semibold text-zinc-900">Payment details (secure)</h3>
+        <p className="mt-1 text-sm text-zinc-600">
+          Used on invoice PDFs. Confirm your password before changes are saved.
+        </p>
+
+        {paymentDetailsLoading ? <p className="mt-3 text-sm text-zinc-600">Loading payment details...</p> : null}
+
+        {!editingPaymentDetails ? (
+          <div className="mt-3 rounded-lg border border-black/10 bg-white p-3">
+            {!paymentDetailsLoading && !paymentDetailsMasked ? (
+              <p className="text-sm text-zinc-600">No payment details saved yet.</p>
+            ) : null}
+
+            {paymentDetailsMasked ? (
+              <dl className="space-y-2 text-sm">
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">Account name</dt>
+                  <dd className="mt-1 text-zinc-900">{paymentDetailsMasked.accountName}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">Sort code</dt>
+                  <dd className="mt-1 text-zinc-900">{paymentDetailsMasked.sortCodeMasked}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">Account number</dt>
+                  <dd className="mt-1 text-zinc-900">{paymentDetailsMasked.accountNumberMasked}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">IBAN / BIC</dt>
+                  <dd className="mt-1 text-zinc-900">
+                    {paymentDetailsMasked.ibanPresent ? "IBAN set" : "No IBAN"} - {paymentDetailsMasked.bicPresent ? "BIC set" : "No BIC"}
+                  </dd>
+                </div>
+                {paymentDetailsMasked.paymentReference ? (
+                  <div>
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500">Payment reference</dt>
+                    <dd className="mt-1 text-zinc-900">{paymentDetailsMasked.paymentReference}</dd>
+                  </div>
+                ) : null}
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-zinc-500">Updated</dt>
+                  <dd className="mt-1 text-zinc-900">{new Date(paymentDetailsMasked.updatedAt).toLocaleString("en-GB")}</dd>
+                </div>
+              </dl>
+            ) : null}
+
+            <div className="mt-3">
+              <button type="button" onClick={handleEditPaymentDetails} className="btn-secondary px-3 py-1.5 text-xs">
+                {paymentDetailsMasked ? "Edit payment details" : "Add payment details"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-black/10 bg-white p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="text-xs text-zinc-600 sm:col-span-2">
+                Account name
+                <input
+                  value={paymentAccountName}
+                  onChange={(event) => setPaymentAccountName(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+
+              <label className="text-xs text-zinc-600">
+                Sort code
+                <input
+                  value={paymentSortCode}
+                  onChange={(event) => setPaymentSortCode(formatSortCodeInput(event.target.value))}
+                  placeholder="12-34-56"
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+
+              <label className="text-xs text-zinc-600">
+                Account number
+                <input
+                  value={paymentAccountNumber}
+                  onChange={(event) => setPaymentAccountNumber(digitsOnly(event.target.value).slice(0, 8))}
+                  placeholder="12345678"
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+
+              <label className="text-xs text-zinc-600">
+                IBAN (optional)
+                <input
+                  value={paymentIban}
+                  onChange={(event) => setPaymentIban(event.target.value.toUpperCase())}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+
+              <label className="text-xs text-zinc-600">
+                BIC (optional)
+                <input
+                  value={paymentBic}
+                  onChange={(event) => setPaymentBic(event.target.value.toUpperCase())}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+
+              <label className="text-xs text-zinc-600 sm:col-span-2">
+                Payment reference (optional)
+                <input
+                  value={paymentReference}
+                  onChange={(event) => setPaymentReference(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+            </div>
+
+            {paymentPasswordPromptVisible ? (
+              <label className="mt-3 block text-xs text-zinc-600">
+                Confirm password
+                <input
+                  type="password"
+                  value={paymentPassword}
+                  onChange={(event) => setPaymentPassword(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-900"
+                />
+              </label>
+            ) : null}
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleSavePaymentDetails}
+                disabled={paymentDetailsSaving}
+                className="btn-primary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {paymentDetailsSaving ? "Saving..." : paymentPasswordPromptVisible ? "Confirm & save" : "Save payment details"}
+              </button>
+              <button
+                type="button"
+                onClick={handleCancelPaymentDetails}
+                disabled={paymentDetailsSaving}
+                className="btn-secondary px-3 py-1.5 text-xs"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {paymentDetailsError ? <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{paymentDetailsError}</p> : null}
+        {paymentDetailsSuccess ? <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">{paymentDetailsSuccess}</p> : null}
       </section>
 
       <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
