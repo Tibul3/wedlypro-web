@@ -42,6 +42,7 @@ type DisplayItem = {
 };
 
 const INSPIRATION_BUCKET = "inspiration";
+const LEGACY_INSPIRATION_BUCKET = "files";
 const MAX_INSPIRATION_IMAGES = 20;
 const clientStatusOptions = ["active", "archived", "converted"];
 
@@ -154,32 +155,105 @@ async function resolveInspirationPreviewUrl(
   storagePath: string,
   fileName: string | null,
 ): Promise<string | null> {
-  if (storagePath.startsWith("http://") || storagePath.startsWith("https://")) return storagePath;
+  const trimmed = storagePath.trim();
+  if (!trimmed) return null;
 
-  const normalized = storagePath.trim();
-  const candidates = [
-    normalized,
-    normalized.startsWith("/") ? normalized.slice(1) : normalized,
-    normalized.replace(/^inspiration\//, ""),
-  ].filter(Boolean);
+  const attempts: Array<{ bucket: string; path: string }> = [];
+  const seen = new Set<string>();
+  const knownBuckets = [INSPIRATION_BUCKET, LEGACY_INSPIRATION_BUCKET];
 
-  for (const candidate of candidates) {
-    const { data, error } = await supabase.storage.from(INSPIRATION_BUCKET).createSignedUrl(candidate, 3600);
+  const addAttempt = (bucket: string, rawPath: string) => {
+    const cleanBucket = bucket.trim();
+    let cleanPath = rawPath.trim();
+    if (!cleanBucket || !cleanPath) return;
+    cleanPath = cleanPath.replace(/^\/+/, "");
+    if (!cleanPath) return;
+    if (cleanPath.startsWith(`${cleanBucket}/`)) {
+      cleanPath = cleanPath.slice(cleanBucket.length + 1);
+    }
+    if (!cleanPath) return;
+    const key = `${cleanBucket}:${cleanPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    attempts.push({ bucket: cleanBucket, path: cleanPath });
+  };
+
+  const parseStorageUrl = (value: string): { bucket: string; path: string } | null => {
+    try {
+      const url = new URL(value);
+      const match = url.pathname.match(/\/storage\/v1\/object\/(?:public|sign|authenticated)\/([^/]+)\/(.+)/i);
+      if (!match) return null;
+      return {
+        bucket: decodeURIComponent(match[1] ?? ""),
+        path: decodeURIComponent(match[2] ?? ""),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const parsedFromUrl = parseStorageUrl(trimmed);
+  if (parsedFromUrl) {
+    addAttempt(parsedFromUrl.bucket, parsedFromUrl.path);
+  }
+
+  const normalizedNoQuery = trimmed.replace(/[?#].*$/, "");
+  const decodedNoQuery = (() => {
+    try {
+      return decodeURIComponent(normalizedNoQuery);
+    } catch {
+      return normalizedNoQuery;
+    }
+  })();
+
+  const rawCandidates = [trimmed, normalizedNoQuery, decodedNoQuery];
+  for (const candidate of rawCandidates) {
+    if (!candidate) continue;
+    for (const bucket of knownBuckets) {
+      addAttempt(bucket, candidate);
+      addAttempt(bucket, candidate.replace(/^https?:\/\//, ""));
+      addAttempt(bucket, candidate.replace(/^\/+/, ""));
+      addAttempt(bucket, candidate.replace(/^inspiration\//, ""));
+      addAttempt(bucket, candidate.replace(/^files\//, ""));
+    }
+  }
+
+  for (const attempt of attempts) {
+    const { data, error } = await supabase.storage.from(attempt.bucket).createSignedUrl(attempt.path, 3600);
     if (!error && data?.signedUrl) return data.signedUrl;
   }
 
-  if (fileName) {
-    const { data: listed, error: listError } = await supabase.storage
-      .from(INSPIRATION_BUCKET)
-      .list(`${supplierId}/${clientId}`, { limit: 200, sortBy: { column: "name", order: "asc" } });
-    if (!listError && listed) {
-      const matched = listed.find((item) => item.name.toLowerCase() === fileName.toLowerCase());
-      if (matched) {
-        const fallbackPath = `${supplierId}/${clientId}/${matched.name}`;
-        const { data, error } = await supabase.storage.from(INSPIRATION_BUCKET).createSignedUrl(fallbackPath, 3600);
+  const fileNameCandidates = [fileName, ...attempts.map((attempt) => attempt.path.split("/").pop() ?? null)]
+    .filter((value): value is string => Boolean(value && value.trim()))
+    .map((value) => value.trim().toLowerCase());
+
+  if (fileNameCandidates.length > 0) {
+    const candidateFolders = Array.from(
+      new Set([
+        `${supplierId}/${clientId}`,
+        ...attempts
+          .map((attempt) => attempt.path.split("/").slice(0, -1).join("/"))
+          .filter((folder) => folder.includes("/") && folder.length > 0),
+      ]),
+    );
+
+    for (const bucket of knownBuckets) {
+      for (const folder of candidateFolders) {
+        const { data: listed, error: listError } = await supabase.storage
+          .from(bucket)
+          .list(folder, { limit: 200, sortBy: { column: "name", order: "asc" } });
+        if (listError || !listed) continue;
+        const matched = listed.find((item) => fileNameCandidates.includes(item.name.toLowerCase()));
+        if (!matched) continue;
+        const fallbackPath = `${folder}/${matched.name}`;
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(fallbackPath, 3600);
         if (!error && data?.signedUrl) return data.signedUrl;
       }
     }
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
   }
 
   return null;
