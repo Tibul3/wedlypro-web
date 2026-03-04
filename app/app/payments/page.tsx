@@ -50,6 +50,13 @@ function formatLabel(key: string): string {
     .join(" ");
 }
 
+function formatDateTime(value: string | null): string {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-GB");
+}
+
 function isTechnicalField(key: string): boolean {
   return key === "id" || key === "supplier_id" || key.endsWith("_id") || key.endsWith("_token");
 }
@@ -73,7 +80,17 @@ function paymentAmount(row: PaymentRow): string {
 }
 
 function paymentDate(row: PaymentRow): string {
-  return pickFirstText(row, ["due_date", "event_date", "issued_at", "created_at"]) ?? "No date";
+  const raw = pickFirstText(row, ["due_date", "event_date", "issued_at", "created_at"]);
+  return raw ? formatDateTime(raw) : "No date";
+}
+
+function detailValue(key: string, value: unknown): string {
+  const raw = toText(value);
+  if (!raw) return "-";
+  if (key.endsWith("_at") || key.includes("date") || key.includes("time")) {
+    return formatDateTime(raw);
+  }
+  return raw;
 }
 
 export default function PaymentsPage() {
@@ -82,8 +99,10 @@ export default function PaymentsPage() {
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [detailMessage, setDetailMessage] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [openingPdf, setOpeningPdf] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -160,10 +179,32 @@ export default function PaymentsPage() {
     }
   }, [visiblePayments, selectedId]);
 
+  useEffect(() => {
+    setDetailMessage(null);
+  }, [selectedId]);
+
   const selected = useMemo(
     () => visiblePayments.find((row) => row.id === selectedId) ?? null,
     [visiblePayments, selectedId],
   );
+
+  const openSelectedPdf = async () => {
+    if (!supabase || !selected) return;
+    const pdfPath = pickFirstText(selected, ["pdf_path"]);
+    if (!pdfPath) return;
+
+    setDetailMessage(null);
+    setOpeningPdf(true);
+    const { data, error: signedError } = await supabase.storage.from("documents").createSignedUrl(pdfPath, 60 * 60);
+    setOpeningPdf(false);
+
+    if (signedError || !data?.signedUrl) {
+      setDetailMessage(signedError?.message ?? "Unable to open PDF.");
+      return;
+    }
+
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  };
 
   if (loading) return <p className="text-sm text-zinc-600">Loading payments...</p>;
 
@@ -248,17 +289,34 @@ export default function PaymentsPage() {
           {!selected ? (
             <p className="mt-3 text-sm text-zinc-600">Select a payment record to view details.</p>
           ) : (
-            <dl className="mt-3 space-y-2 text-sm">
-              {Object.entries(selected)
-                .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                .slice(0, 18)
-                .map(([key, value]) => (
-                  <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
-                    <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-                  </div>
-                ))}
-            </dl>
+            <>
+              {pickFirstText(selected, ["pdf_path"]) ? (
+                <div className="mt-3 rounded-lg border border-black/10 bg-zinc-50 px-3 py-2">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500">PDF</p>
+                  <button
+                    type="button"
+                    onClick={openSelectedPdf}
+                    disabled={openingPdf}
+                    className="mt-2 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {openingPdf ? "Opening..." : "Open PDF"}
+                  </button>
+                  {detailMessage ? <p className="mt-2 text-xs text-red-700">{detailMessage}</p> : null}
+                </div>
+              ) : null}
+              <dl className="mt-3 space-y-2 text-sm">
+                {Object.entries(selected)
+                  .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
+                  .filter(([key]) => key !== "pdf_path" && key !== "content_json")
+                  .slice(0, 18)
+                  .map(([key, value]) => (
+                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
+                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
+                      <dd className="mt-1 break-words text-zinc-800">{detailValue(key, value)}</dd>
+                    </div>
+                  ))}
+              </dl>
+            </>
           )}
         </aside>
       </div>
