@@ -48,6 +48,7 @@ type SearchPersonRow = {
   name_1: string | null;
   name_2: string | null;
   email: string | null;
+  status: string | null;
 };
 
 type SearchDateRow = {
@@ -62,7 +63,11 @@ type GlobalSearchResult = {
   label: string;
   detail: string;
   href: string;
+  badge?: string;
 };
+
+const hiddenClientStatuses = new Set(["archived", "converted", "deleted"]);
+const hiddenLeadStatuses = new Set(["archived", "converted", "lost", "deleted"]);
 
 const navItems: NavItem[] = [
   { href: "/app/leads", label: "Leads" },
@@ -168,6 +173,7 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
   const [notifications, setNotifications] = useState<ContractNotification[]>([]);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchIncludeArchived, setSearchIncludeArchived] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -313,20 +319,25 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
       const cleanQuery = query.replace(/[(),]/g, " ").trim();
       const likePattern = `%${cleanQuery}%`;
 
+      const clientQuery = supabase
+        .from("clients")
+        .select("id,name_1,name_2,email,status")
+        .eq("supplier_id", supplier.id)
+        .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`);
+
+      const leadQuery = supabase
+        .from("leads")
+        .select("id,name_1,name_2,email,status")
+        .eq("supplier_id", supplier.id)
+        .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`);
+
+      clientQuery.limit(20);
+      leadQuery.limit(20);
+
       const [{ data: clientsData, error: clientsError }, { data: leadsData, error: leadsError }, { data: datesData, error: datesError }] =
         await Promise.all([
-          supabase
-            .from("clients")
-            .select("id,name_1,name_2,email")
-            .eq("supplier_id", supplier.id)
-            .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`)
-            .limit(5),
-          supabase
-            .from("leads")
-            .select("id,name_1,name_2,email")
-            .eq("supplier_id", supplier.id)
-            .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`)
-            .limit(5),
+          clientQuery,
+          leadQuery,
           supabase
             .from("key_dates")
             .select("id,title,datetime")
@@ -345,21 +356,38 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
         return;
       }
 
-      const clientResults = ((clientsData ?? []) as SearchPersonRow[]).map((client) => ({
-        id: client.id,
-        kind: "client" as const,
-        label: personDisplayName(client.name_1, client.name_2, "Client"),
-        detail: client.email?.trim() || "Client",
-        href: `/app/clients/${client.id}`,
-      }));
+      const rawClients = (clientsData ?? []) as SearchPersonRow[];
+      const rawLeads = (leadsData ?? []) as SearchPersonRow[];
+      const filteredClients = searchIncludeArchived
+        ? rawClients
+        : rawClients.filter((client) => !hiddenClientStatuses.has((client.status ?? "").trim().toLowerCase()));
+      const filteredLeads = searchIncludeArchived
+        ? rawLeads
+        : rawLeads.filter((lead) => !hiddenLeadStatuses.has((lead.status ?? "").trim().toLowerCase()));
 
-      const leadResults = ((leadsData ?? []) as SearchPersonRow[]).map((lead) => ({
-        id: lead.id,
-        kind: "lead" as const,
-        label: personDisplayName(lead.name_1, lead.name_2, "Lead"),
-        detail: lead.email?.trim() || "Lead",
-        href: `/app/leads?selected=${lead.id}`,
-      }));
+      const clientResults = filteredClients.map((client) => {
+        const status = (client.status ?? "").trim().toLowerCase();
+        return {
+          id: client.id,
+          kind: "client" as const,
+          label: personDisplayName(client.name_1, client.name_2, "Client"),
+          detail: client.email?.trim() || "Client",
+          href: `/app/clients/${client.id}`,
+          badge: hiddenClientStatuses.has(status) ? (client.status ?? "Archived") : undefined,
+        };
+      });
+
+      const leadResults = filteredLeads.map((lead) => {
+        const status = (lead.status ?? "").trim().toLowerCase();
+        return {
+          id: lead.id,
+          kind: "lead" as const,
+          label: personDisplayName(lead.name_1, lead.name_2, "Lead"),
+          detail: lead.email?.trim() || "Lead",
+          href: `/app/leads?selected=${lead.id}`,
+          badge: hiddenLeadStatuses.has(status) ? (lead.status ?? "Archived") : undefined,
+        };
+      });
 
       const dateResults = ((datesData ?? []) as SearchDateRow[]).map((item) => ({
         id: item.id,
@@ -367,9 +395,15 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
         label: item.title?.trim() || "Key date",
         detail: item.datetime ? formatNotificationDate(item.datetime) : "Calendar",
         href: `/app/calendar?selected=${item.id}`,
+        badge: undefined,
       }));
 
-      setSearchResults([...clientResults, ...leadResults, ...dateResults].slice(0, 12));
+      const combined = [...clientResults, ...leadResults, ...dateResults].sort((a, b) => {
+        const aPenalty = a.badge ? 1 : 0;
+        const bPenalty = b.badge ? 1 : 0;
+        return aPenalty - bPenalty;
+      });
+      setSearchResults(combined.slice(0, 12));
       setSearchLoading(false);
     }, 220);
 
@@ -377,7 +411,7 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [searchQuery, supabase, supplier]);
+  }, [searchIncludeArchived, searchQuery, supabase, supplier]);
 
   useEffect(() => {
     let mounted = true;
@@ -598,6 +632,15 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
                       Type at least 2 characters.
                     </p>
                   ) : null}
+                  <label className="mb-2 inline-flex items-center gap-2 px-1 text-xs text-zinc-600">
+                    <input
+                      type="checkbox"
+                      checked={searchIncludeArchived}
+                      onChange={(event) => setSearchIncludeArchived(event.target.checked)}
+                      className="h-3.5 w-3.5"
+                    />
+                    Include archived/deleted records
+                  </label>
 
                   {searchLoading ? (
                     <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
@@ -632,7 +675,14 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
                           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
                             {result.kind === "key_date" ? "Calendar" : result.kind === "client" ? "Client" : "Lead"}
                           </p>
-                          <p className="mt-1 text-sm text-zinc-900">{result.label}</p>
+                          <div className="mt-1 flex items-center gap-2">
+                            <p className="text-sm text-zinc-900">{result.label}</p>
+                            {result.badge ? (
+                              <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-700">
+                                {result.badge}
+                              </span>
+                            ) : null}
+                          </div>
                           <p className="mt-1 text-xs text-zinc-500">{result.detail}</p>
                         </Link>
                       ))}
