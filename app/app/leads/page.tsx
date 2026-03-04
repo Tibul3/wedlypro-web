@@ -19,6 +19,7 @@ type LeadColumn = {
 type LeadForm = {
   status: string;
   full_name: string;
+  partner_name: string;
   email: string;
   phone: string;
   wedding_date: string;
@@ -50,6 +51,7 @@ const statusOptions = [
 const emptyForm: LeadForm = {
   status: "New",
   full_name: "",
+  partner_name: "",
   email: "",
   phone: "",
   wedding_date: "",
@@ -85,12 +87,6 @@ function statusTitle(statusKey: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function leadFieldLabel(key: string): string {
-  if (key === "name_1" || key === "name") return "Full name";
-  if (key === "name_2") return "Partner's name";
-  return statusTitle(key);
 }
 
 function leadDisplayName(lead: LeadRow): string {
@@ -130,21 +126,11 @@ function buildColumns(leads: LeadRow[]): LeadColumn[] {
   }));
 }
 
-function isTechnicalField(key: string): boolean {
-  return (
-    key === "id" ||
-    key === "supplier_id" ||
-    key === "created_at" ||
-    key === "updated_at" ||
-    key.endsWith("_id") ||
-    key.endsWith("_token")
-  );
-}
-
 function formFromLead(lead: LeadRow): LeadForm {
   return {
     status: pickFirstText(lead, ["status"]) ?? "New",
     full_name: pickFirstText(lead, ["name_1", "name"]) ?? "",
+    partner_name: pickFirstText(lead, ["name_2"]) ?? "",
     email: pickFirstText(lead, ["email"]) ?? "",
     phone: pickFirstText(lead, ["phone"]) ?? "",
     wedding_date: pickFirstText(lead, ["wedding_date"]) ?? "",
@@ -152,6 +138,32 @@ function formFromLead(lead: LeadRow): LeadForm {
     source: pickFirstText(lead, ["source"]) ?? "",
     notes: pickFirstText(lead, ["notes"]) ?? "",
   };
+}
+
+type DisplayItem = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+function leadDisplayItems(lead: LeadRow): DisplayItem[] {
+  const ordered: DisplayItem[] = [];
+  const push = (key: string, label: string, value: string | null) => {
+    if (!value) return;
+    ordered.push({ key, label, value });
+  };
+
+  push("status", "Status", pickFirstText(lead, ["status"]));
+  push("full_name", "Full name", pickFirstText(lead, ["name_1", "name"]));
+  push("partner_name", "Partner's name", pickFirstText(lead, ["name_2"]));
+  push("email", "Email", pickFirstText(lead, ["email"]));
+  push("phone", "Phone", pickFirstText(lead, ["phone"]));
+  push("wedding_date", "Wedding date", pickFirstText(lead, ["wedding_date"]));
+  push("venue", "Venue", pickFirstText(lead, ["venue"]));
+  push("source", "Source", pickFirstText(lead, ["source"]));
+  push("notes", "Notes", pickFirstText(lead, ["notes"]));
+
+  return ordered;
 }
 
 export default function LeadsPage() {
@@ -334,7 +346,7 @@ export default function LeadsPage() {
       supplier_id: supplierId,
       status: form.status.trim() || "New",
       name_1: form.full_name.trim(),
-      name_2: null,
+      name_2: form.partner_name.trim() || null,
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       wedding_date: form.wedding_date || null,
@@ -573,6 +585,14 @@ export default function LeadsPage() {
                 />
               </label>
               <label className="block text-xs text-zinc-600">
+                Partner's name (optional)
+                <input
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
+                  value={form.partner_name}
+                  onChange={(e) => setForm((prev) => ({ ...prev, partner_name: e.target.value }))}
+                />
+              </label>
+              <label className="block text-xs text-zinc-600">
                 Email
                 <input
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm"
@@ -658,15 +678,12 @@ export default function LeadsPage() {
               </div>
 
               <dl className="space-y-2 text-sm">
-                {Object.entries(selectedLead)
-                  .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                  .slice(0, 18)
-                  .map(([key, value]) => (
-                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{leadFieldLabel(key)}</dt>
-                      <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-                    </div>
-                  ))}
+                {leadDisplayItems(selectedLead).map((item) => (
+                  <div key={item.key} className="rounded-lg border border-black/10 px-3 py-2">
+                    <dt className="text-xs uppercase tracking-wide text-zinc-500">{item.label}</dt>
+                    <dd className="mt-1 break-words text-zinc-800">{item.value}</dd>
+                  </div>
+                ))}
               </dl>
 
               <section className="rounded-lg border border-black/10 p-3">

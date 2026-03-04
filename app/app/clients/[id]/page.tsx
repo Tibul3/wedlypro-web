@@ -54,24 +54,6 @@ function formatLabel(key: string): string {
     .join(" ");
 }
 
-function clientFieldLabel(key: string): string {
-  if (key === "name_1" || key === "name") return "Full name";
-  if (key === "name_2") return "Partner's name";
-  return formatLabel(key);
-}
-
-function isTechnicalField(key: string): boolean {
-  return (
-    key === "id" ||
-    key === "supplier_id" ||
-    key === "created_at" ||
-    key === "updated_at" ||
-    key.endsWith("_id") ||
-    key.endsWith("_token") ||
-    key.startsWith("converted_from_")
-  );
-}
-
 function extractPartnerPhone(notes: string | null): string {
   if (!notes) return "";
   const match = notes.match(/^Partner phone:\s*(.+)$/im);
@@ -686,16 +668,6 @@ export default function ClientDetailPage() {
               <dd className="mt-1 break-words text-zinc-800">{item.value}</dd>
             </div>
           ))}
-          {Object.entries(client)
-            .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-            .filter(([key]) => !["status", "name_1", "name_2", "name", "client_name", "email", "phone", "wedding_date", "event_date", "venue", "notes"].includes(key))
-            .slice(0, 8)
-            .map(([key, value]) => (
-              <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                <dt className="text-xs uppercase tracking-wide text-zinc-500">{clientFieldLabel(key)}</dt>
-                <dd className="mt-1 break-words text-zinc-800">{String(value)}</dd>
-              </div>
-            ))}
         </dl>
       )}
 
