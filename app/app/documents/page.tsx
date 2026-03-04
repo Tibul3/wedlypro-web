@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { jsPDF } from "jspdf";
+import { useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type DocumentType = "quote" | "invoice" | "contract";
@@ -539,6 +540,7 @@ function buildDocumentEmailTemplate(params: {
 
 export default function DocumentsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const searchParams = useSearchParams();
 
   const [supplier, setSupplier] = useState<SupplierRow | null>(null);
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -670,6 +672,14 @@ export default function DocumentsPage() {
     () => visibleDocuments.find((document) => document.id === selectedDocumentId) ?? null,
     [visibleDocuments, selectedDocumentId],
   );
+
+  useEffect(() => {
+    const requestedId = searchParams.get("selected");
+    if (!requestedId) return;
+    if (visibleDocuments.some((document) => document.id === requestedId)) {
+      setSelectedDocumentId(requestedId);
+    }
+  }, [searchParams, visibleDocuments]);
 
   const canCreateContracts = isProfessionalSupplier(supplier);
 

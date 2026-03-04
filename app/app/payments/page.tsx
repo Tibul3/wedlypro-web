@@ -1,54 +1,41 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
-type PaymentRow = {
+type SupplierRow = {
   id: string;
+};
+
+type ClientRow = {
+  id: string;
+  name_1: string | null;
+  name_2: string | null;
+  email: string | null;
+};
+
+type InvoiceContent = {
+  invoiceNumber?: string;
   [key: string]: unknown;
 };
 
-const statusOrder = ["paid", "unpaid", "overdue"];
+type InvoiceRow = {
+  id: string;
+  client_id: string;
+  supplier_id: string;
+  status: "draft" | "sent" | "paid" | "signed";
+  total: number;
+  subtotal: number;
+  currency: string;
+  content_json: InvoiceContent | null;
+  pdf_path: string | null;
+  sent_at: string | null;
+  invoice_paid_at: string | null;
+  created_at: string;
+};
 
-function toText(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "string") return value.trim() || null;
-  if (typeof value === "number") return String(value);
-  return null;
-}
-
-function toNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function pickFirstText(record: PaymentRow, keys: string[]): string | null {
-  for (const key of keys) {
-    const value = toText(record[key]);
-    if (value) return value;
-  }
-  return null;
-}
-
-function pickFirstNumber(record: PaymentRow, keys: string[]): number | null {
-  for (const key of keys) {
-    const value = toNumber(record[key]);
-    if (value !== null) return value;
-  }
-  return null;
-}
-
-function formatLabel(key: string): string {
-  return key
-    .split("_")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
+type PaymentStatus = "all" | "draft" | "unpaid" | "paid";
 
 function formatDateTime(value: string | null): string {
   if (!value) return "-";
@@ -57,158 +44,222 @@ function formatDateTime(value: string | null): string {
   return parsed.toLocaleString("en-GB");
 }
 
-function isTechnicalField(key: string): boolean {
-  return key === "id" || key === "supplier_id" || key.endsWith("_id") || key.endsWith("_token");
+function formatMoney(value: number, currency: string): string {
+  return new Intl.NumberFormat("en-GB", {
+    style: "currency",
+    currency: currency || "GBP",
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
-function paymentStatus(row: PaymentRow): string {
-  const raw = pickFirstText(row, ["payment_status", "status", "invoice_status"]);
-  return raw ? raw.toLowerCase() : "unknown";
+function clientDisplayName(client: ClientRow | null): string {
+  if (!client) return "Unknown client";
+  const name1 = client.name_1?.trim() || "";
+  const name2 = client.name_2?.trim() || "";
+  if (name1 && name2) return `${name1} & ${name2}`;
+  return name1 || name2 || `Client ${client.id.slice(0, 8)}`;
 }
 
-function paymentTitle(row: PaymentRow): string {
-  return (
-    pickFirstText(row, ["invoice_number", "title", "document_title", "client_name", "name", "email"]) ??
-    `Payment ${String(row.id).slice(0, 8)}`
-  );
+function invoiceNumber(invoice: InvoiceRow): string {
+  const raw = invoice.content_json?.invoiceNumber;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : "-";
 }
 
-function paymentAmount(row: PaymentRow): string {
-  const amount = pickFirstNumber(row, ["amount_due", "amount", "total", "total_amount"]);
-  if (amount === null) return "Amount not set";
-  return `£${amount.toFixed(2)}`;
+function paymentStatus(invoice: InvoiceRow): Exclude<PaymentStatus, "all"> {
+  return invoice.status === "paid" ? "paid" : invoice.status === "sent" ? "unpaid" : "draft";
 }
 
-function paymentDate(row: PaymentRow): string {
-  const raw = pickFirstText(row, ["due_date", "event_date", "issued_at", "created_at"]);
-  return raw ? formatDateTime(raw) : "No date";
+function paymentStatusLabel(status: Exclude<PaymentStatus, "all">): string {
+  if (status === "paid") return "Paid";
+  if (status === "unpaid") return "Unpaid";
+  return "Draft";
 }
 
-function detailValue(key: string, value: unknown): string {
-  const raw = toText(value);
-  if (!raw) return "-";
-  if (key.endsWith("_at") || key.includes("date") || key.includes("time")) {
-    return formatDateTime(raw);
-  }
-  return raw;
+function statusClass(status: Exclude<PaymentStatus, "all">): string {
+  if (status === "paid") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "unpaid") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-zinc-200 bg-zinc-100 text-zinc-700";
 }
 
 export default function PaymentsPage() {
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [supplierId, setSupplierId] = useState<string | null>(null);
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [clients, setClients] = useState<ClientRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [detailMessage, setDetailMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<PaymentStatus>("all");
   const [openingPdf, setOpeningPdf] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+
+  const loadData = async () => {
+    if (!supabase) {
+      setError("Web app is not configured yet.");
+      setLoading(false);
+      return;
+    }
+
+    const {
+      data: { session },
+      error: sessionError,
+    } = await supabase.auth.getSession();
+
+    if (sessionError || !session) {
+      setError("Please sign in again.");
+      setLoading(false);
+      return;
+    }
+
+    const { data: supplierData, error: supplierError } = await supabase
+      .from("suppliers")
+      .select("id")
+      .eq("user_id", session.user.id)
+      .maybeSingle<SupplierRow>();
+
+    if (supplierError || !supplierData) {
+      setError(supplierError?.message ?? "Supplier profile missing.");
+      setLoading(false);
+      return;
+    }
+
+    setSupplierId(supplierData.id);
+
+    const [{ data: invoiceData, error: invoiceError }, { data: clientData, error: clientError }] =
+      await Promise.all([
+        supabase
+          .from("documents")
+          .select(
+            "id,client_id,supplier_id,status,total,subtotal,currency,content_json,pdf_path,sent_at,invoice_paid_at,created_at",
+          )
+          .eq("supplier_id", supplierData.id)
+          .eq("type", "invoice")
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("clients")
+          .select("id,name_1,name_2,email")
+          .eq("supplier_id", supplierData.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (invoiceError) {
+      setError(invoiceError.message);
+      setLoading(false);
+      return;
+    }
+    if (clientError) {
+      setError(clientError.message);
+      setLoading(false);
+      return;
+    }
+
+    const nextInvoices = (invoiceData ?? []) as InvoiceRow[];
+    const nextClients = (clientData ?? []) as ClientRow[];
+
+    setInvoices(nextInvoices);
+    setClients(nextClients);
+    setSelectedId((prev) => prev ?? nextInvoices[0]?.id ?? null);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    let mounted = true;
-
-    async function loadPayments() {
-      if (!supabase) {
-        if (mounted) {
-          setError("Web app is not configured yet.");
-          setLoading(false);
-        }
-        return;
-      }
-
-      const { data, error: queryError } = await supabase
-        .from("documents")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (!mounted) return;
-
-      if (queryError) {
-        setError(queryError.message);
-        setLoading(false);
-        return;
-      }
-
-      const docs = (data ?? []) as PaymentRow[];
-      const inferredPayments = docs.filter((row) => {
-        const type = pickFirstText(row, ["document_type", "type", "kind", "category"])?.toLowerCase() ?? "";
-        const hasPaymentFields =
-          pickFirstNumber(row, ["amount_due", "amount", "total", "total_amount"]) !== null ||
-          pickFirstText(row, ["payment_status", "invoice_status"]) !== null;
-        return type.includes("invoice") || hasPaymentFields;
-      });
-
-      setPayments(inferredPayments);
-      setSelectedId(inferredPayments[0]?.id ?? null);
-      setLoading(false);
-    }
-
-    void loadPayments();
-
-    return () => {
-      mounted = false;
-    };
+    void loadData();
   }, [supabase]);
 
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = { all: payments.length };
-    for (const row of payments) {
-      const status = paymentStatus(row);
-      counts[status] = (counts[status] ?? 0) + 1;
+  const clientsById = useMemo(() => {
+    const map = new Map<string, ClientRow>();
+    for (const client of clients) map.set(client.id, client);
+    return map;
+  }, [clients]);
+
+  const visibleInvoices = useMemo(() => {
+    if (statusFilter === "all") return invoices;
+    return invoices.filter((invoice) => paymentStatus(invoice) === statusFilter);
+  }, [invoices, statusFilter]);
+
+  const counts = useMemo(() => {
+    const base = { all: invoices.length, draft: 0, unpaid: 0, paid: 0 };
+    for (const invoice of invoices) {
+      base[paymentStatus(invoice)] += 1;
     }
-    return counts;
-  }, [payments]);
-
-  const availableStatuses = useMemo(() => {
-    const discovered = Object.keys(statusCounts).filter((status) => status !== "all");
-    return [
-      ...statusOrder.filter((status) => discovered.includes(status)),
-      ...discovered.filter((status) => !statusOrder.includes(status)).sort(),
-    ];
-  }, [statusCounts]);
-
-  const visiblePayments = useMemo(() => {
-    if (statusFilter === "all") return payments;
-    return payments.filter((row) => paymentStatus(row) === statusFilter);
-  }, [payments, statusFilter]);
+    return base;
+  }, [invoices]);
 
   useEffect(() => {
     if (!selectedId) return;
-    if (!visiblePayments.some((row) => row.id === selectedId)) {
-      setSelectedId(visiblePayments[0]?.id ?? null);
+    if (!visibleInvoices.some((invoice) => invoice.id === selectedId)) {
+      setSelectedId(visibleInvoices[0]?.id ?? null);
     }
-  }, [visiblePayments, selectedId]);
-
-  useEffect(() => {
-    setDetailMessage(null);
-  }, [selectedId]);
+  }, [visibleInvoices, selectedId]);
 
   const selected = useMemo(
-    () => visiblePayments.find((row) => row.id === selectedId) ?? null,
-    [visiblePayments, selectedId],
+    () => visibleInvoices.find((invoice) => invoice.id === selectedId) ?? null,
+    [visibleInvoices, selectedId],
   );
 
   const openSelectedPdf = async () => {
-    if (!supabase || !selected) return;
-    const pdfPath = pickFirstText(selected, ["pdf_path"]);
-    if (!pdfPath) return;
-
-    setDetailMessage(null);
+    if (!supabase || !selected?.pdf_path) return;
+    setError(null);
+    setNotice(null);
     setOpeningPdf(true);
-    const { data, error: signedError } = await supabase.storage.from("documents").createSignedUrl(pdfPath, 60 * 60);
+
+    const { data, error: signedError } = await supabase.storage
+      .from("documents")
+      .createSignedUrl(selected.pdf_path, 60 * 60);
+
     setOpeningPdf(false);
 
     if (signedError || !data?.signedUrl) {
-      setDetailMessage(signedError?.message ?? "Unable to open PDF.");
+      setError(signedError?.message ?? "Unable to open invoice PDF.");
       return;
     }
 
     window.open(data.signedUrl, "_blank", "noopener,noreferrer");
   };
 
+  const updateSelectedStatus = async (target: "sent" | "paid") => {
+    if (!supabase || !selected || !supplierId) return;
+
+    setError(null);
+    setNotice(null);
+    setUpdatingStatus(true);
+
+    const payload: Record<string, unknown> = { status: target };
+    if (target === "sent") {
+      payload.sent_at = selected.sent_at ?? new Date().toISOString();
+      payload.invoice_paid_at = null;
+      payload.invoice_paid_method = null;
+      payload.invoice_paid_reference = null;
+    }
+    if (target === "paid") {
+      payload.sent_at = selected.sent_at ?? new Date().toISOString();
+      payload.invoice_paid_at = new Date().toISOString();
+      payload.invoice_paid_method = "manual";
+      payload.invoice_paid_reference = "web";
+    }
+
+    const { error: updateError } = await supabase
+      .from("documents")
+      .update(payload)
+      .eq("id", selected.id)
+      .eq("supplier_id", supplierId);
+
+    setUpdatingStatus(false);
+
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+
+    await loadData();
+    setSelectedId(selected.id);
+    setNotice(target === "paid" ? "Invoice marked as paid." : "Invoice marked as unpaid.");
+  };
+
   if (loading) return <p className="text-sm text-zinc-600">Loading payments...</p>;
 
-  if (error) {
+  if (error && !supplierId) {
     return (
       <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
         Failed to load payments: {error}
@@ -219,18 +270,9 @@ export default function PaymentsPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-zinc-600">Read-only payment view inferred from invoice data.</p>
+        <p className="text-sm text-zinc-600">Track invoice payment state and quick actions from one place.</p>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => setStatusFilter("all")}
-            className={`rounded-full border px-3 py-1 text-xs ${
-              statusFilter === "all" ? "border-zinc-900 bg-zinc-900 text-white" : "border-black/10 bg-white text-zinc-700"
-            }`}
-          >
-            All ({statusCounts.all ?? 0})
-          </button>
-          {availableStatuses.map((status) => (
+          {(["all", "draft", "unpaid", "paid"] as PaymentStatus[]).map((status) => (
             <button
               key={status}
               type="button"
@@ -241,41 +283,47 @@ export default function PaymentsPage() {
                   : "border-black/10 bg-white text-zinc-700"
               }`}
             >
-              {formatLabel(status)} ({statusCounts[status] ?? 0})
+              {status === "all" ? "All" : paymentStatusLabel(status)} ({counts[status] ?? 0})
             </button>
           ))}
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+      {error ? <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}
+      {notice ? (
+        <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>
+      ) : null}
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
         <section className="rounded-xl border border-black/10 bg-zinc-50 p-3">
-          <h2 className="text-sm font-semibold text-zinc-900">Payments ({visiblePayments.length})</h2>
+          <h2 className="text-sm font-semibold text-zinc-900">Invoices ({visibleInvoices.length})</h2>
           <div className="mt-3 space-y-2">
-            {visiblePayments.length === 0 ? (
+            {visibleInvoices.length === 0 ? (
               <p className="rounded-lg border border-dashed border-black/10 bg-white px-3 py-3 text-xs text-zinc-500">
-                No payment records found.
+                No invoices found.
               </p>
             ) : (
-              visiblePayments.map((row) => {
-                const active = selectedId === row.id;
-                const status = paymentStatus(row);
+              visibleInvoices.map((invoice) => {
+                const active = selectedId === invoice.id;
+                const status = paymentStatus(invoice);
+                const linkedClient = clientsById.get(invoice.client_id) ?? null;
                 return (
                   <button
-                    key={row.id}
+                    key={invoice.id}
                     type="button"
-                    onClick={() => setSelectedId(row.id)}
+                    onClick={() => setSelectedId(invoice.id)}
                     className={`w-full min-w-0 overflow-hidden rounded-lg border px-3 py-2 text-left transition ${
                       active
                         ? "border-zinc-900 bg-zinc-900 text-white"
                         : "border-black/10 bg-white text-zinc-700 hover:bg-zinc-100"
                     }`}
                   >
-                    <p className="truncate text-sm font-medium">{paymentTitle(row)}</p>
+                    <p className="truncate text-sm font-medium">{clientDisplayName(linkedClient)}</p>
                     <p className={`mt-1 truncate text-xs ${active ? "text-zinc-200" : "text-zinc-500"}`}>
-                      {paymentAmount(row)} - {formatLabel(status)}
+                      {formatMoney(Number(invoice.total || 0), invoice.currency)} - {paymentStatusLabel(status)}
                     </p>
                     <p className={`mt-1 truncate text-xs ${active ? "text-zinc-300" : "text-zinc-500"}`}>
-                      {paymentDate(row)}
+                      Created {formatDateTime(invoice.created_at)}
                     </p>
                   </button>
                 );
@@ -286,37 +334,96 @@ export default function PaymentsPage() {
 
         <aside className="h-fit rounded-xl border border-black/10 bg-white p-4">
           <h3 className="text-sm font-semibold text-zinc-900">Payment details</h3>
+
           {!selected ? (
-            <p className="mt-3 text-sm text-zinc-600">Select a payment record to view details.</p>
+            <p className="mt-3 text-sm text-zinc-600">Select an invoice to view payment details.</p>
           ) : (
-            <>
-              {pickFirstText(selected, ["pdf_path"]) ? (
-                <div className="mt-3 rounded-lg border border-black/10 bg-zinc-50 px-3 py-2">
-                  <p className="text-xs uppercase tracking-wide text-zinc-500">PDF</p>
-                  <button
-                    type="button"
-                    onClick={openSelectedPdf}
-                    disabled={openingPdf}
-                    className="mt-2 rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+            <div className="mt-3 space-y-3 text-sm">
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Client</p>
+                <p className="mt-1 text-zinc-900">{clientDisplayName(clientsById.get(selected.client_id) ?? null)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Client email</p>
+                <p className="mt-1 break-words text-zinc-900">{clientsById.get(selected.client_id)?.email ?? "-"}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Invoice number</p>
+                <p className="mt-1 text-zinc-900">{invoiceNumber(selected)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Status</p>
+                <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(paymentStatus(selected))}`}>
+                  {paymentStatusLabel(paymentStatus(selected))}
+                </span>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Total</p>
+                <p className="mt-1 text-zinc-900">{formatMoney(Number(selected.total || 0), selected.currency)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Created</p>
+                <p className="mt-1 text-zinc-900">{formatDateTime(selected.created_at)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Sent at</p>
+                <p className="mt-1 text-zinc-900">{formatDateTime(selected.sent_at)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Paid at</p>
+                <p className="mt-1 text-zinc-900">{formatDateTime(selected.invoice_paid_at)}</p>
+              </div>
+
+              <div className="rounded-lg border border-black/10 bg-zinc-50 px-3 py-3">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Actions</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Link
+                    href={`/app/documents?selected=${selected.id}`}
+                    className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50"
                   >
-                    {openingPdf ? "Opening..." : "Open PDF"}
-                  </button>
-                  {detailMessage ? <p className="mt-2 text-xs text-red-700">{detailMessage}</p> : null}
+                    Open invoice
+                  </Link>
+
+                  {selected.pdf_path ? (
+                    <button
+                      type="button"
+                      onClick={openSelectedPdf}
+                      disabled={openingPdf || updatingStatus}
+                      className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {openingPdf ? "Opening..." : "Open PDF"}
+                    </button>
+                  ) : null}
+
+                  {paymentStatus(selected) !== "paid" ? (
+                    <button
+                      type="button"
+                      onClick={() => void updateSelectedStatus("paid")}
+                      disabled={updatingStatus || openingPdf}
+                      className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {updatingStatus ? "Please wait..." : "Mark paid"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void updateSelectedStatus("sent")}
+                      disabled={updatingStatus || openingPdf}
+                      className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {updatingStatus ? "Please wait..." : "Mark unpaid"}
+                    </button>
+                  )}
                 </div>
-              ) : null}
-              <dl className="mt-3 space-y-2 text-sm">
-                {Object.entries(selected)
-                  .filter(([key, value]) => value !== null && value !== "" && !isTechnicalField(key))
-                  .filter(([key]) => key !== "pdf_path" && key !== "content_json")
-                  .slice(0, 18)
-                  .map(([key, value]) => (
-                    <div key={key} className="rounded-lg border border-black/10 px-3 py-2">
-                      <dt className="text-xs uppercase tracking-wide text-zinc-500">{formatLabel(key)}</dt>
-                      <dd className="mt-1 break-words text-zinc-800">{detailValue(key, value)}</dd>
-                    </div>
-                  ))}
-              </dl>
-            </>
+              </div>
+            </div>
           )}
         </aside>
       </div>

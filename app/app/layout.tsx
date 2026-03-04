@@ -43,6 +43,27 @@ type ContractNotification = {
   read: boolean;
 };
 
+type SearchPersonRow = {
+  id: string;
+  name_1: string | null;
+  name_2: string | null;
+  email: string | null;
+};
+
+type SearchDateRow = {
+  id: string;
+  title: string | null;
+  datetime: string | null;
+};
+
+type GlobalSearchResult = {
+  id: string;
+  kind: "client" | "lead" | "key_date";
+  label: string;
+  detail: string;
+  href: string;
+};
+
 const navItems: NavItem[] = [
   { href: "/app/leads", label: "Leads" },
   { href: "/app/clients", label: "Clients" },
@@ -113,6 +134,13 @@ function clientDisplayName(client: ClientNameRow | null): string {
   return name1 || name2 || "Client";
 }
 
+function personDisplayName(name1: string | null, name2: string | null, fallback: string): string {
+  const first = name1?.trim() || "";
+  const second = name2?.trim() || "";
+  if (first && second) return `${first} & ${second}`;
+  return first || second || fallback;
+}
+
 function formatNotificationDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -139,6 +167,12 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<ContractNotification[]>([]);
   const notificationsRef = useRef<HTMLDivElement | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchResults, setSearchResults] = useState<GlobalSearchResult[]>([]);
+  const searchRef = useRef<HTMLDivElement | null>(null);
 
   const unreadNotifications = notifications.filter((item) => !item.read).length;
 
@@ -245,6 +279,105 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
     window.addEventListener("mousedown", onPointerDown);
     return () => window.removeEventListener("mousedown", onPointerDown);
   }, [notificationsOpen]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (searchRef.current && !searchRef.current.contains(target)) {
+        setSearchOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", onPointerDown);
+    return () => window.removeEventListener("mousedown", onPointerDown);
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!supabase || !supplier) return;
+
+    const query = searchQuery.trim();
+    if (query.length < 2) {
+      setSearchLoading(false);
+      setSearchError(null);
+      setSearchResults([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      setSearchLoading(true);
+      setSearchError(null);
+
+      const cleanQuery = query.replace(/[(),]/g, " ").trim();
+      const likePattern = `%${cleanQuery}%`;
+
+      const [{ data: clientsData, error: clientsError }, { data: leadsData, error: leadsError }, { data: datesData, error: datesError }] =
+        await Promise.all([
+          supabase
+            .from("clients")
+            .select("id,name_1,name_2,email")
+            .eq("supplier_id", supplier.id)
+            .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`)
+            .limit(5),
+          supabase
+            .from("leads")
+            .select("id,name_1,name_2,email")
+            .eq("supplier_id", supplier.id)
+            .or(`name_1.ilike.${likePattern},name_2.ilike.${likePattern},email.ilike.${likePattern}`)
+            .limit(5),
+          supabase
+            .from("key_dates")
+            .select("id,title,datetime")
+            .eq("supplier_id", supplier.id)
+            .ilike("title", likePattern)
+            .order("datetime", { ascending: true })
+            .limit(5),
+        ]);
+
+      if (cancelled) return;
+
+      if (clientsError || leadsError || datesError) {
+        setSearchLoading(false);
+        setSearchResults([]);
+        setSearchError(clientsError?.message ?? leadsError?.message ?? datesError?.message ?? "Search failed.");
+        return;
+      }
+
+      const clientResults = ((clientsData ?? []) as SearchPersonRow[]).map((client) => ({
+        id: client.id,
+        kind: "client" as const,
+        label: personDisplayName(client.name_1, client.name_2, "Client"),
+        detail: client.email?.trim() || "Client",
+        href: `/app/clients/${client.id}`,
+      }));
+
+      const leadResults = ((leadsData ?? []) as SearchPersonRow[]).map((lead) => ({
+        id: lead.id,
+        kind: "lead" as const,
+        label: personDisplayName(lead.name_1, lead.name_2, "Lead"),
+        detail: lead.email?.trim() || "Lead",
+        href: `/app/leads?selected=${lead.id}`,
+      }));
+
+      const dateResults = ((datesData ?? []) as SearchDateRow[]).map((item) => ({
+        id: item.id,
+        kind: "key_date" as const,
+        label: item.title?.trim() || "Key date",
+        detail: item.datetime ? formatNotificationDate(item.datetime) : "Calendar",
+        href: `/app/calendar?selected=${item.id}`,
+      }));
+
+      setSearchResults([...clientResults, ...leadResults, ...dateResults].slice(0, 12));
+      setSearchLoading(false);
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchQuery, supabase, supplier]);
 
   useEffect(() => {
     let mounted = true;
@@ -434,11 +567,80 @@ export default function ProductLayout({ children }: { children: React.ReactNode 
             <p className="text-xs text-zinc-500">Desktop web app (beta)</p>
           </div>
           <div className="flex items-center gap-2">
-            <input
-              placeholder="Search"
-              disabled
-              className="w-40 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-500 md:w-56"
-            />
+            <div className="relative" ref={searchRef}>
+              <input
+                placeholder="Search clients, leads, key dates..."
+                value={searchQuery}
+                onChange={(event) => {
+                  setSearchQuery(event.target.value);
+                  if (!searchOpen) setSearchOpen(true);
+                }}
+                onFocus={() => setSearchOpen(true)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchOpen(false);
+                    return;
+                  }
+                  if (event.key === "Enter" && searchResults.length > 0) {
+                    event.preventDefault();
+                    const first = searchResults[0];
+                    setSearchOpen(false);
+                    setSearchQuery("");
+                    router.push(first.href);
+                  }
+                }}
+                className="w-56 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-zinc-700 placeholder:text-zinc-500 md:w-72"
+              />
+              {searchOpen ? (
+                <div className="absolute right-0 z-30 mt-2 w-80 rounded-xl border border-black/10 bg-white p-2 shadow-[0_20px_40px_-20px_rgba(16,24,40,0.35)]">
+                  {searchQuery.trim().length < 2 ? (
+                    <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                      Type at least 2 characters.
+                    </p>
+                  ) : null}
+
+                  {searchLoading ? (
+                    <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                      Searching...
+                    </p>
+                  ) : null}
+
+                  {!searchLoading && searchError ? (
+                    <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      {searchError}
+                    </p>
+                  ) : null}
+
+                  {!searchLoading && !searchError && searchQuery.trim().length >= 2 && searchResults.length === 0 ? (
+                    <p className="rounded-lg border border-black/5 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+                      No matches found.
+                    </p>
+                  ) : null}
+
+                  {!searchLoading && !searchError && searchResults.length > 0 ? (
+                    <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+                      {searchResults.map((result) => (
+                        <Link
+                          key={`${result.kind}-${result.id}`}
+                          href={result.href}
+                          onClick={() => {
+                            setSearchOpen(false);
+                            setSearchQuery("");
+                          }}
+                          className="block rounded-lg border border-black/10 bg-white px-3 py-2 hover:bg-zinc-50"
+                        >
+                          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                            {result.kind === "key_date" ? "Calendar" : result.kind === "client" ? "Client" : "Lead"}
+                          </p>
+                          <p className="mt-1 text-sm text-zinc-900">{result.label}</p>
+                          <p className="mt-1 text-xs text-zinc-500">{result.detail}</p>
+                        </Link>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
             <div className="relative" ref={notificationsRef}>
               <button
                 type="button"
