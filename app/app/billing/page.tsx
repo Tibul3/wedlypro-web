@@ -32,7 +32,7 @@ type BillingEvent = {
 function sourceLabel(source: string | null): string {
   if (source === "ios_iap") return "Apple In-App Purchase";
   if (source === "web_stripe") return "Web Stripe";
-  if (source === "manual") return "Manual";
+  if (source === "manual") return "No active subscription";
   return "None";
 }
 
@@ -71,7 +71,20 @@ function renewalSummary(supplier: SupplierBillingRow): string {
   const status = (supplier.subscription_status ?? "inactive").toLowerCase();
 
   if (source === "manual") {
-    return "No web subscription is active on this account.";
+    return "No paid subscription is active on this account.";
+  }
+
+  if (source === "ios_iap") {
+    if (status === "trialing" && supplier.trial_ends_at) {
+      return `Apple trial ends on ${formatDate(supplier.trial_ends_at)}. Manage or cancel in App Store subscription settings.`;
+    }
+    if (supplier.entitlement_expires_at) {
+      if (status === "canceled" || status === "grace_period") {
+        return `Apple cancellation recorded. Access remains until ${formatDate(supplier.entitlement_expires_at)}.`;
+      }
+      return `Apple access period ends on ${formatDate(supplier.entitlement_expires_at)}.`;
+    }
+    return "Managed by Apple subscription settings.";
   }
 
   if (status === "trialing") {
@@ -97,7 +110,9 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [runningAction, setRunningAction] = useState<"essentials" | "professional" | "portal" | null>(null);
+  const [runningAction, setRunningAction] = useState<
+    "essentials" | "professional" | "portal" | "sync" | null
+  >(null);
   const [events, setEvents] = useState<BillingEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(false);
 
@@ -170,7 +185,7 @@ export default function BillingPage() {
     if (!supabase) return;
 
     setActionMessage(null);
-    setRunningAction("portal");
+    setRunningAction("sync");
 
     const {
       data: { session },
@@ -277,6 +292,11 @@ export default function BillingPage() {
   const isAppleManaged = source === "ios_iap";
   const isWebStripe = source === "web_stripe";
   const isProfessional = supplier.tier === "professional" || supplier.plan === "pro";
+  const status = (supplier.subscription_status ?? "inactive").toLowerCase();
+  const canStartEssentials = !isAppleManaged && !isWebStripe;
+  const canUpgradeProfessional = !isAppleManaged && !isProfessional;
+  const canManageStripe = isWebStripe;
+  const showSyncAction = !isAppleManaged;
 
   return (
     <div className="space-y-4">
@@ -308,12 +328,13 @@ export default function BillingPage() {
         <h3 className="text-sm font-semibold text-zinc-900">Manage billing</h3>
 
         {isAppleManaged ? (
-          <p className="mt-2 text-sm text-zinc-600">
-            This account is billed through Apple. Web checkout is disabled for Apple-managed subscriptions.
-          </p>
+          <div className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+            This account is managed through Apple. To change plan, renew, or cancel, use iPhone App Store
+            subscription settings.
+          </div>
         ) : (
           <div className="mt-3 flex flex-wrap gap-2">
-            {!isWebStripe ? (
+            {canStartEssentials ? (
               <button
                 type="button"
                 onClick={() => runBillingAction("checkout", "essentials")}
@@ -324,18 +345,22 @@ export default function BillingPage() {
               </button>
             ) : null}
 
-            {!isProfessional ? (
+            {canUpgradeProfessional ? (
               <button
                 type="button"
                 onClick={() => runBillingAction("checkout", "professional")}
                 disabled={runningAction !== null}
                 className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {runningAction === "professional" ? "Please wait..." : "Upgrade to Professional"}
+                {runningAction === "professional"
+                  ? "Please wait..."
+                  : isWebStripe
+                    ? "Upgrade to Professional"
+                    : "Start Professional (Web)"}
               </button>
             ) : null}
 
-            {isWebStripe ? (
+            {canManageStripe ? (
               <button
                 type="button"
                 onClick={() => runBillingAction("portal")}
@@ -346,16 +371,24 @@ export default function BillingPage() {
               </button>
             ) : null}
 
-            <button
-              type="button"
-              onClick={runManualSync}
-              disabled={runningAction !== null}
-              className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {runningAction === "portal" ? "Please wait..." : "Sync billing status"}
-            </button>
+            {showSyncAction ? (
+              <button
+                type="button"
+                onClick={runManualSync}
+                disabled={runningAction !== null}
+                className="rounded-lg border border-black/10 px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {runningAction === "sync" ? "Please wait..." : "Sync billing status"}
+              </button>
+            ) : null}
           </div>
         )}
+
+        {isWebStripe && status === "active" && !isProfessional ? (
+          <p className="mt-3 text-xs text-zinc-500">
+            You are on Essentials. Upgrade to Professional at any time.
+          </p>
+        ) : null}
 
         {actionMessage ? (
           <p className="mt-3 rounded-lg border border-black/10 bg-zinc-50 px-3 py-2 text-sm text-zinc-700">{actionMessage}</p>
@@ -364,9 +397,15 @@ export default function BillingPage() {
 
       <section className="rounded-xl border border-black/10 bg-white p-4">
         <h3 className="text-sm font-semibold text-zinc-900">Billing diagnostics</h3>
-        <p className="mt-1 text-xs text-zinc-500">Recent Stripe webhook events linked to this account.</p>
+        <p className="mt-1 text-xs text-zinc-500">
+          {isAppleManaged
+            ? "Stripe diagnostics are unavailable for Apple-managed subscriptions."
+            : "Recent Stripe webhook events linked to this account."}
+        </p>
 
-        {eventsLoading ? (
+        {isAppleManaged ? (
+          <p className="mt-3 text-sm text-zinc-600">No Stripe webhook events apply to this account source.</p>
+        ) : eventsLoading ? (
           <p className="mt-3 text-sm text-zinc-600">Loading events...</p>
         ) : events.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-600">No webhook events recorded for this user yet.</p>
