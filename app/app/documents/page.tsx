@@ -207,6 +207,14 @@ function displayDocumentStatus(type: DocumentType, status: DocumentStatus): stri
   return formatLabel(status);
 }
 
+function statusBadgeClass(type: DocumentType, status: DocumentStatus): string {
+  if (status === "draft") return "border-zinc-200 bg-zinc-100 text-zinc-700";
+  if (status === "signed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "paid") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (type === "invoice" && status === "sent") return "border-blue-200 bg-blue-50 text-blue-700";
+  return "border-amber-200 bg-amber-50 text-amber-700";
+}
+
 function isProfessionalSupplier(supplier: SupplierRow | null): boolean {
   if (!supplier) return false;
   return supplier.tier === "professional" || supplier.plan === "pro";
@@ -552,6 +560,7 @@ export default function DocumentsPage() {
 
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<"all" | DocumentType>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | DocumentStatus>("all");
 
   const [editorMode, setEditorMode] = useState<EditorMode>(null);
   const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
@@ -635,9 +644,20 @@ export default function DocumentsPage() {
   }, [clients]);
 
   const visibleDocuments = useMemo(() => {
-    if (typeFilter === "all") return documents;
-    return documents.filter((document) => document.type === typeFilter);
-  }, [documents, typeFilter]);
+    return documents.filter((document) => {
+      if (typeFilter !== "all" && document.type !== typeFilter) return false;
+      if (statusFilter !== "all" && document.status !== statusFilter) return false;
+      return true;
+    });
+  }, [documents, typeFilter, statusFilter]);
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<DocumentStatus, number> = { draft: 0, sent: 0, paid: 0, signed: 0 };
+    for (const document of visibleDocuments) {
+      counts[document.status] += 1;
+    }
+    return counts;
+  }, [visibleDocuments]);
 
   useEffect(() => {
     if (!selectedDocumentId) return;
@@ -1439,6 +1459,17 @@ export default function DocumentsPage() {
           htmlBody: template.htmlBody,
         });
 
+        if (selectedDocument.status === "draft") {
+          await supabase
+            .from("documents")
+            .update({
+              status: "sent",
+              sent_at: new Date().toISOString(),
+            })
+            .eq("id", selectedDocument.id)
+            .eq("supplier_id", supplier.id);
+        }
+
         await loadData();
         setSelectedDocumentId(selectedDocument.id);
         setNotice("Contract signing request sent.");
@@ -1581,6 +1612,34 @@ export default function DocumentsPage() {
             New document
           </button>
         </div>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        <button
+          type="button"
+          onClick={() => setStatusFilter("all")}
+          className={`rounded-xl border px-3 py-2 text-left ${
+            statusFilter === "all" ? "border-zinc-900 bg-zinc-900 text-white" : "border-black/10 bg-white text-zinc-700"
+          }`}
+        >
+          <p className="text-[11px] uppercase tracking-wide">All statuses</p>
+          <p className="mt-1 text-lg font-semibold">{visibleDocuments.length}</p>
+        </button>
+        {documentStatuses.map((status) => (
+          <button
+            key={status}
+            type="button"
+            onClick={() => setStatusFilter(status)}
+            className={`rounded-xl border px-3 py-2 text-left ${
+              statusFilter === status ? "border-zinc-900 bg-zinc-900 text-white" : "border-black/10 bg-white text-zinc-700"
+            }`}
+          >
+            <p className="text-[11px] uppercase tracking-wide">
+              {status === "sent" ? "Sent / submitted" : formatLabel(status)}
+            </p>
+            <p className="mt-1 text-lg font-semibold">{statusCounts[status]}</p>
+          </button>
+        ))}
       </div>
 
       {!canCreateContracts ? (
@@ -1828,7 +1887,7 @@ export default function DocumentsPage() {
                   >
                     <p className="truncate text-sm font-medium">{documentTitle(document, linkedClient)}</p>
                     <p className={`mt-1 text-xs ${active ? "text-zinc-200" : "text-zinc-500"}`}>
-                      {formatLabel(document.type)} - {formatLabel(document.status)}
+                      {formatLabel(document.type)} - {displayDocumentStatus(document.type, document.status)}
                     </p>
                     <p className={`mt-1 text-xs ${active ? "text-zinc-300" : "text-zinc-500"}`}>
                       {formatDateTime(document.created_at)}
@@ -1880,7 +1939,14 @@ export default function DocumentsPage() {
               </div>
               <div className="rounded-lg border border-black/10 px-3 py-2">
                 <p className="text-xs uppercase tracking-wide text-zinc-500">Status</p>
-                <p className="mt-1 text-zinc-900">{formatLabel(selectedDocument.status)}</p>
+                <span
+                  className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(
+                    selectedDocument.type,
+                    selectedDocument.status,
+                  )}`}
+                >
+                  {displayDocumentStatus(selectedDocument.type, selectedDocument.status)}
+                </span>
               </div>
               {selectedDocument.type !== "contract" ? (
                 <div className="rounded-lg border border-black/10 px-3 py-2">
@@ -1908,6 +1974,23 @@ export default function DocumentsPage() {
                   </p>
                 </div>
               ) : null}
+              <div className="rounded-lg border border-black/10 px-3 py-2">
+                <p className="text-xs uppercase tracking-wide text-zinc-500">Timeline</p>
+                <div className="mt-1 space-y-1 text-zinc-900">
+                  <p>Created: {formatDateTime(selectedDocument.created_at)}</p>
+                  <p>Sent: {formatDateTime(selectedDocument.sent_at)}</p>
+                  {selectedDocument.type === "invoice" ? (
+                    <p>Paid: {formatDateTime(selectedDocument.invoice_paid_at)}</p>
+                  ) : null}
+                  {selectedDocument.type === "contract" ? (
+                    <>
+                      <p>Signing requested: {formatDateTime(selectedDocument.signing_requested_at)}</p>
+                      <p>Signing expires: {formatDateTime(selectedDocument.signing_expires_at)}</p>
+                      <p>Signed: {formatDateTime(selectedDocument.signed_at)}</p>
+                    </>
+                  ) : null}
+                </div>
+              </div>
 
               {selectedDocument.type !== "contract" ? (
                 <div className="rounded-lg border border-black/10 px-3 py-2">
