@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type PreferenceState = boolean | null;
@@ -116,7 +117,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [calendarSyncEnabled, setCalendarSyncEnabled] = useState(false);
 
   const [supplier, setSupplier] = useState<SupplierSettingsRow | null>(null);
   const [businessName, setBusinessName] = useState("");
@@ -917,9 +917,15 @@ export default function SettingsPage() {
       <section className="rounded-xl border border-black/10 bg-zinc-50 p-4">
         <h3 className="text-sm font-semibold text-zinc-900">Calendar sync</h3>
         <p className="mt-1 text-sm text-zinc-600">
-          Connect an external calendar so key dates can be synced outside Wedly Pro.
+          Export key dates as .ics files from the calendar page today. Provider-connected sync is the next rollout.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
+          <Link
+            href="/app/calendar"
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-zinc-800 hover:bg-zinc-100"
+          >
+            Open calendar exports
+          </Link>
           <button
             type="button"
             disabled
@@ -934,20 +940,9 @@ export default function SettingsPage() {
           >
             Connect Outlook (Coming soon)
           </button>
-          <button
-            type="button"
-            onClick={() => setCalendarSyncEnabled((prev) => !prev)}
-            className={`rounded-lg border px-3 py-2 text-sm ${
-              calendarSyncEnabled
-                ? "border-zinc-900 bg-zinc-900 text-white"
-                : "border-black/10 bg-white text-zinc-800"
-            }`}
-          >
-            {calendarSyncEnabled ? "Auto-sync enabled (local preview)" : "Enable auto-sync (local preview)"}
-          </button>
         </div>
         <p className="mt-3 text-xs text-zinc-500">
-          Full provider integration requires OAuth setup and server webhooks. This section is staged for that rollout.
+          Use the calendar screen to download either a selected event or all key dates as an .ics file.
         </p>
       </section>
     </div>

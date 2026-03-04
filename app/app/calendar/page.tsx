@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { buildIcsCalendar, downloadIcsFile, type IcsEventInput } from "../../lib/ics";
 import { getSupabaseBrowserClient } from "../../lib/supabaseClient";
 
 type KeyDateRow = {
@@ -135,6 +136,14 @@ function formatDateTime(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("en-GB");
+}
+
+function safeFilePart(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "")
+    .slice(0, 40);
 }
 
 function isTechnicalField(key: string): boolean {
@@ -285,6 +294,55 @@ export default function CalendarPage() {
     [form.link_type, activeClients, activeLeads, form.link_id, clientsById, leadsById],
   );
 
+  const toIcsEvent = (item: KeyDateRow): IcsEventInput | null => {
+    const startIso = pickFirstText(item, ["datetime", "date", "event_date", "due_date", "start_date"]);
+    if (!startIso) return null;
+
+    const parsedDate = new Date(startIso);
+    if (Number.isNaN(parsedDate.getTime())) return null;
+
+    const target = linkedRecordTarget(item);
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+    const linkedRecord = displayLinkedRecord(item, clientsById, leadsById);
+    const reminderRaw = pickFirstText(item, ["reminder_minutes"]);
+    const reminderMinutes = reminderRaw ? Number.parseInt(reminderRaw, 10) : null;
+
+    return {
+      uid: `${item.id}@wedlypro.com`,
+      title: displayTitle(item),
+      startIso: parsedDate.toISOString(),
+      description: `Linked record: ${linkedRecord}`,
+      url: target ? `${baseUrl}${target.href}` : null,
+      reminderMinutes: Number.isNaN(reminderMinutes ?? Number.NaN) ? null : reminderMinutes,
+    };
+  };
+
+  const handleDownloadSelectedIcs = () => {
+    if (!selected) return;
+    const event = toIcsEvent(selected);
+    if (!event) {
+      window.alert("Selected key date does not have a valid date/time to export.");
+      return;
+    }
+
+    const fileBase = safeFilePart(displayTitle(selected)) || `key-date-${selected.id.slice(0, 8)}`;
+    const fileName = `${fileBase}.ics`;
+    downloadIcsFile(fileName, buildIcsCalendar([event]));
+  };
+
+  const handleDownloadAllIcs = () => {
+    const events = dates
+      .map((item) => toIcsEvent(item))
+      .filter((item): item is IcsEventInput => item !== null);
+
+    if (events.length === 0) {
+      window.alert("No key dates with valid date/time values are available to export.");
+      return;
+    }
+
+    downloadIcsFile("wedlypro-key-dates.ics", buildIcsCalendar(events));
+  };
+
   useEffect(() => {
     const requestedId = searchParams.get("selected");
     if (!requestedId) return;
@@ -430,14 +488,34 @@ export default function CalendarPage() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-zinc-600">Key dates synced from Supabase. You can now create and edit entries.</p>
-        <button
-          type="button"
-          onClick={startCreate}
-          className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50"
-        >
-          New key date
-        </button>
+        <p className="text-sm text-zinc-600">
+          Key dates synced from Supabase. Create events and export .ics files for external calendars.
+        </p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={handleDownloadSelectedIcs}
+            disabled={!selected}
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+          >
+            Download selected (.ics)
+          </button>
+          <button
+            type="button"
+            onClick={handleDownloadAllIcs}
+            disabled={dates.length === 0}
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+          >
+            Download all (.ics)
+          </button>
+          <button
+            type="button"
+            onClick={startCreate}
+            className="rounded-lg border border-black/10 bg-white px-3 py-2 text-xs text-zinc-700 hover:bg-zinc-50"
+          >
+            New key date
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
